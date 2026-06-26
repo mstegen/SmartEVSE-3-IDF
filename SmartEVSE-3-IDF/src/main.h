@@ -222,8 +222,7 @@ void setPilot(bool On);
 #define ACTUATOR_OFF { digitalWrite(PIN_ACTB, HIGH); digitalWrite(PIN_ACTA, HIGH); }
 
 #define RCMFAULT digitalRead(PIN_RCM_FAULT) //TODO ok for v4?
-#define SEND_TO_CH32(X) //dummy
-#define SEND_TO_ESP32(X) //dummy
+
 #define CONTACTOR1_ON _LOG_A("Switching Contactor1 ON.\n"); digitalWrite(PIN_SSR, HIGH);
 #define CONTACTOR1_OFF _LOG_A("Switching Contactor1 OFF.\n"); digitalWrite(PIN_SSR, LOW);
 
