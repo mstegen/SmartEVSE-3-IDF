@@ -1,0 +1,2013 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>Smart EVSE V3</title>
+
+  <link rel="stylesheet" href="https://code.jquery.com/mobile/1.4.5/jquery.mobile-1.4.5.min.css" />
+	<script src="https://code.jquery.com/jquery-1.11.1.min.js"></script>
+	<script src="https://code.jquery.com/mobile/1.4.5/jquery.mobile-1.4.5.min.js"></script>
+
+  <!-- Required meta tags -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-1BmE4kWBq78iYhFldvKuhfTAU6auU8tT94WrHftjDbrCEXSU1oBoqyl2QvZ6jIW3" crossorigin="anonymous">
+
+  <link href="styling.css" rel="stylesheet">
+</head>
+
+<body>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p" crossorigin="anonymous"></script>
+
+  <script>
+      let endpoint = '/settings';
+      // let endpoint = 'http://10.0.0.36/settings';
+      let initiated=false;
+      let mqttEditMode = false;
+      let ocppEditMode = false;
+      let last_evse_state_id=0;
+      let latestRawSettingsJson = "";
+      const isRawDataPage = new URLSearchParams(window.location.search).get('raw') === '1';
+      window.isRawDataPage = isRawDataPage;
+
+      if (isRawDataPage) {
+        document.addEventListener('DOMContentLoaded', initRawDataPage);
+      } else {
+        $(document).ready(loadData());
+      }
+
+      // Function to toggle cert visibility
+      function toggleCertVisibility() {
+          if ($('#mqtt_tls').is(':checked')) {
+              $('#mqtt_ca_cert_wrapper').show();
+          } else {
+              $('#mqtt_ca_cert_wrapper').hide();
+          }
+      }
+
+      /**
+       * Helper function to query the DOM for a single element.
+       */
+      const $qs = (selector) => document.querySelector(selector);
+
+      function escapeHtml(text) {
+        return text.replace(/[&<>"']/g, function (char) {
+          return ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "\"": "&quot;",
+            "'": "&#39;"
+          })[char];
+        });
+      }
+
+      function highlightJson(jsonText) {
+        let out = "";
+        let i = 0;
+        while (i < jsonText.length) {
+          const ch = jsonText[i];
+
+          if (ch === "\"") {
+            let j = i + 1;
+            let escaped = false;
+            while (j < jsonText.length) {
+              const next = jsonText[j];
+              if (escaped) {
+                escaped = false;
+              } else if (next === "\\") {
+                escaped = true;
+              } else if (next === "\"") {
+                j++;
+                break;
+              }
+              j++;
+            }
+            out += '<span class="json-string">' + escapeHtml(jsonText.slice(i, j)) + "</span>";
+            i = j;
+            continue;
+          }
+
+          if (ch === "-" || (ch >= "0" && ch <= "9")) {
+            const match = jsonText.slice(i).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+\-]?\d+)?/);
+            if (match) {
+              out += '<span class="json-number">' + match[0] + "</span>";
+              i += match[0].length;
+              continue;
+            }
+          }
+
+          out += escapeHtml(ch);
+          i++;
+        }
+        return out;
+      }
+
+      async function loadRawSettings() {
+        const status = document.getElementById("raw_data_status");
+        const jsonBox = document.getElementById("raw_data_json");
+        const downloadBtn = document.getElementById("raw_download");
+        status.textContent = "Loading settings...";
+        jsonBox.textContent = "";
+        downloadBtn.disabled = true;
+
+        try {
+          const response = await fetch("/settings", { cache: "no-store" });
+          if (!response.ok) {
+            throw new Error("HTTP " + response.status);
+          }
+          latestRawSettingsJson = await response.text();
+          let formattedJson = latestRawSettingsJson;
+          try {
+            formattedJson = JSON.stringify(JSON.parse(latestRawSettingsJson), null, 2);
+          } catch (parseError) {
+            formattedJson = latestRawSettingsJson;
+          }
+          jsonBox.innerHTML = highlightJson(formattedJson);
+          downloadBtn.disabled = false;
+          status.textContent = "";
+        } catch (error) {
+          latestRawSettingsJson = "";
+          status.textContent = "Error loading /settings: " + error.message;
+          jsonBox.textContent = "Failed to load /settings.";
+        }
+      }
+
+      function downloadRawSettings() {
+        if (!latestRawSettingsJson) return;
+        const now = new Date();
+        const pad = function (n) { return String(n).padStart(2, "0"); };
+        const timestamp = now.getFullYear() +
+          pad(now.getMonth() + 1) +
+          pad(now.getDate()) + "-" +
+          pad(now.getHours()) +
+          pad(now.getMinutes()) +
+          pad(now.getSeconds());
+
+        const blob = new Blob([latestRawSettingsJson], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "settings-" + timestamp + ".json";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }
+
+      function initRawDataPage() {
+        document.body.classList.add("raw-data-page");
+        document.body.innerHTML = `
+          <div class="raw-data-page-wrap">
+            <form class="form-inline raw-btns">
+              <button class="raw-btn" id="raw_back" type="button">Back</button>
+              <button class="raw-btn" id="raw_refresh" type="button">Refresh</button>
+              <button class="raw-btn" id="raw_download" type="button" disabled>Download</button>
+            </form>
+            <div id="raw_data_status">Loading settings...</div>
+            <pre id="raw_data_json"></pre>
+          </div>
+        `;
+        document.getElementById("raw_back").addEventListener("click", function () {
+          window.location.href = "/";
+        });
+        document.getElementById("raw_refresh").addEventListener("click", loadRawSettings);
+        document.getElementById("raw_download").addEventListener("click", downloadRawSettings);
+        loadRawSettings();
+      }
+
+      function loadData(){
+        $.ajax({
+              url: endpoint
+          }).then(function(data) {
+            if(!initiated) {
+              initiated = true;
+              // Set the text and the data-version attribute dynamically
+              $('#version')
+                .text(data.version)         // fill visible text with version string
+                .attr('data-version', data.version); // update data-version attribute
+              sessionStorage.setItem("version",JSON.stringify(data.version));
+              $('#serialnr').append(data.serialnr);
+              sessionStorage.setItem("serialnr",JSON.stringify(data.serialnr));
+
+              let minCurrent=parseInt(data.settings.current_min.toFixed(1));
+              let maxCurrent=parseInt(data.settings.current_max.toFixed(1));
+
+              // Initialize at page load
+              // value 0 = no override
+              if(data.evse.loadbl < 2) {
+                $('#mode_override_current').append($('<option>', {
+                    value: 0,
+                    text: 'no override'
+                }));
+                for(let x = minCurrent ; x <= maxCurrent ; x++) {
+                  $('#mode_override_current').append($('<option>', {
+                      value: x,
+                      text: x + 'A'
+                  }));
+                }
+              }
+              $('#required_evccid').val(data.settings.required_evccid || "");
+            }
+
+            // Show the active mode and active mode-button (in green).
+            $qs('#mode').textContent = data.mode;
+            for (let x of [0, 1, 2, 3, 4]) {
+                $qs(`#mode_${x}`).classList.toggle('ui-btn-active', x === data.mode_id);
+            }
+
+            $('#dutycycle').text((data.evse.pwm*100/1024).toFixed(0) + " %");
+            if(data.mode_id == 2) { //SOLAR MODE
+              $('.with_solar').show();
+              $('[id=override_current_box]').hide();
+              $('[id=override_current_box2]').hide();
+            } else {
+              $('.with_solar').hide();
+              $('[id=override_current_box]').show();
+              $('[id=override_current_box2]').show();
+            }
+
+            if (data.ev_state) {
+              let full_soc = data.ev_state.full_soc;
+              let initial_soc = data.ev_state.initial_soc;
+              let computed_soc = data.ev_state.computed_soc;
+              let time_until_full = data.ev_state.time_until_full;
+              let energy_capacity = data.ev_state.energy_capacity;
+              let energy_request = data.ev_state.energy_request;
+              let evccid = data.ev_state.evccid;
+
+              $('#computed_soc').html(computed_soc >= 0 ? computed_soc + " &#37;" : "N/A");
+              $('#full_soc').html(full_soc >= 0 ? full_soc + " &#37;" : "N/A");
+              $('#initial_soc').html(initial_soc >= 0 ? initial_soc + " &#37;" : "N/A");
+              $('#energy_capacity').html(energy_capacity >= 0 ? (energy_capacity/1000).toFixed(1) + " kWh" : "N/A");
+              $('#evccid').html(evccid || "N/A");
+              $('#full_at')
+                .text(time_until_full > 0 ? new Date(+Date.now()+(time_until_full * 1000)).toLocaleString(undefined, { timeStyle: 'short', dateStyle: "short" }) : 'N/A')
+                .attr('title', (time_until_full > 0 ? Math.round(time_until_full / 60) + ' min to go' : 'N/A'));
+            }
+
+            if (data.mqtt) {
+              $('#mqtt').text((data.mqtt.status) || 'N/A').show();
+              $('#mqtt_config').show();
+            } else {
+              $('#mqtt').text('').hide();
+              $('.config').hide();
+              $('#mqtt_config').hide();
+            }
+
+            if(data.evse.loadbl > 1) {
+              $('[id=loadbl]').show();
+              $('[id=loadbl_text]').show();
+              $('[id=loadbl_node]').text("Slave Node "+(data.evse.loadbl-1));
+              //$('[id=loadbl_text_slave]').show();
+              //$('[id=loadbl_text_master]').hide();
+              $('[id=contactor2]').hide();
+              //$('[id=form_mode] :input').prop('disabled',true);
+              $('[id=mode_2]').show();
+              $('[id=mode_3]').show();
+              $('.with_solar').hide();
+              //$('[id=mode_override_current]').prop('disabled',true);
+              $('[id=override_current_box]').hide();
+              $('[id=override_current_box2]').hide();
+              $('[id=form_pwm] :input').prop('disabled',true);
+            } else if (data.evse.loadbl == 1) {
+              $('[id=loadbl]').show();
+              $('[id=loadbl_text]').show();
+              $('[id=loadbl_node]').text("Master");
+              //$('[id=loadbl_text_slave]').hide();
+              //$('[id=loadbl_text_master]').show();
+              $('[id=contactor2]').hide();
+              //$('[id=form_mode] :input').prop('disabled',false);
+              $('[id=mode_2]').show();
+              $('[id=mode_3]').show();
+              $('.with_solar').hide();
+              //$('[id=mode_override_current]').prop('disabled',false);
+              $('[id=form_pwm] :input').prop('disabled',false);
+            } else {
+              $('[id=loadbl]').hide();
+              $('[id=loadbl_text]').hide();
+              //$('[id=loadbl_text_slave]').hide();
+              //$('[id=loadbl_text_master]').hide();
+              $('[id=contactor2]').show();
+              //$('[id=form_mode] :input').prop('disabled',false);
+              $('[id=mode_2]').show();
+              $('[id=mode_3]').show();
+              //$('[id=mode_override_current]').prop('disabled',false);
+              $('[id=form_pwm] :input').prop('disabled',false);
+            }
+            $('#car_connected').text(data.car_connected ? "Yes" : "No");
+            $('#state').text(data.evse.state);
+            last_evse_state_id = data.evse.last_state_id;
+            $('#temp').text(data.evse.temp + " °C / " + data.evse.temp_max + " °C");
+            if(data.evse.error != "None") {
+              $('#error').text(data.evse.error);
+              $('[id=with_errors]').show();
+            } else {
+              $('[id=with_errors]').hide();
+            }
+
+            if(data.evse.rfid != "Not Installed") {
+              $('#rfid').text(data.evse.rfid);
+            } else {
+              $('#show_rfid').hide();
+            }
+
+            // if(data.evse.charge_timer > 0) {
+            //   $('#state').append(" (Starting in " + data.evse.charge_timer + "s)");
+            // }
+            if(data.evse.solar_stop_timer > 0) {
+              $('#state').append(" (Stopping in " + data.evse.solar_stop_timer + "s)");
+            }
+
+            $('#current_min').text(data.settings.current_min.toFixed(1) + " A");
+            $('#current_max').text(data.settings.current_max.toFixed(1) + " A");
+            $('#override_current').text((data.settings.override_current/10).toFixed(1) + " A");
+            $('#enable_C2').text(data.settings.enable_C2);
+            if (data.settings.starttime) {
+                $('#starttime_date_time').text(new Date(data.settings.starttime * 1000).toLocaleDateString() + " " + new Date(data.settings.starttime * 1000).toLocaleTimeString());
+            } else {
+                $('#starttime_date_time').text("none");
+            }
+            if (data.settings.stoptime) {
+                $('#stoptime_date_time').text(new Date(data.settings.stoptime * 1000).toLocaleDateString() + " " + new Date(data.settings.stoptime * 1000).toLocaleTimeString());
+            } else {
+                $('#stoptime_date_time').text("none");
+            }
+            if (data.settings.repeat == 1) {
+                $('#repeat').text("Daily");
+            }
+            else {
+                $('#repeat').text("none");
+            }
+            $('#battery_current').text((data.home_battery.current/10).toFixed(1) + " A");
+
+            $('#phase_total').text((data.phase_currents.TOTAL/10).toFixed(1) + " A");
+            $('#phase_1').text((data.phase_currents.L1/10).toFixed(1) + " A");
+            $('#phase_2').text((data.phase_currents.L2/10).toFixed(1) + " A");
+            $('#phase_3').text((data.phase_currents.L3/10).toFixed(1) + " A");
+            $('#evmeter_currents_total').text((data.ev_meter.currents.TOTAL/10).toFixed(1) + " A");
+            $('#evmeter_currents_1').text((data.ev_meter.currents.L1/10).toFixed(1) + " A");
+            $('#evmeter_currents_2').text((data.ev_meter.currents.L2/10).toFixed(1) + " A");
+            $('#evmeter_currents_3').text((data.ev_meter.currents.L3/10).toFixed(1) + " A");
+            $('#charge_current').text((data.settings.charge_current/10).toFixed(1) + " A");
+
+            $('#phase_original_total').text((data.phase_currents.original_data.TOTAL/10).toFixed(1) + " A");
+            $('#phase_original_1').text((data.phase_currents.original_data.L1/10).toFixed(1) + " A");
+            $('#phase_original_2').text((data.phase_currents.original_data.L2/10).toFixed(1) + " A");
+            $('#phase_original_3').text((data.phase_currents.original_data.L3/10).toFixed(1) + " A");
+
+            if(data.phase_currents.last_data_update > 0) {
+              $('#p1_data_time').text(new Date(data.phase_currents.last_data_update * 1000).toLocaleTimeString());
+              $('#p1_data_date').text(new Date(data.phase_currents.last_data_update * 1000).toLocaleDateString());
+              $('[id=with_p1_api_data_date]').show();
+              $('[id=with_p1_api_data_time]').show();
+            } else {
+              $('[id=with_p1_api_data_date]').hide();
+              $('[id=with_p1_api_data_time]').hide();
+            }
+
+            if(data.home_battery.last_update > 0) {
+              $('#battery_last_update_time').text(new Date(data.home_battery.last_update * 1000).toLocaleTimeString());
+              $('#battery_last_update_date').text(new Date(data.home_battery.last_update * 1000).toLocaleDateString());
+              $('[id=with_homebattery]').show();
+            } else {
+              $('[id=with_homebattery]').hide();
+            }
+
+            if(data.home_battery.current == 0) {
+              $('#battery_status').text("Idle");
+            } else {
+              $('#battery_status').text(data.home_battery.current < 0 ? "Discharging" : "Charging");
+            }
+
+            if(data.settings.mains_meter === "Disabled") {
+              $('.with_mainsmeter').hide();
+            } else {
+              $('.with_mainsmeter').show();
+              if ((data.mains_meter && data.mains_meter.host || '').trim()) {
+                $('#mainsmeter_host').text(mainsHost);
+                $('[id=with_mainsmeter_host]').show();
+              } else {
+                $('[id=with_mainsmeter_host]').hide();
+              }
+            }
+
+            if(data.ev_meter.description == "Disabled") {
+              $('[id=with_evmeter]').hide();
+            } else {
+              $('[id=with_evmeter]').show();
+              $('#evmeter_description').text(data.ev_meter.description);
+              if ((data.ev_meter.host || '').trim()) {
+                $('#evmeter_host').text(data.ev_meter.host);
+                $('[id=with_evmeter_host]').show();
+              } else {
+                $('[id=with_evmeter_host]').hide();
+              }
+              $('#evmeter_power').text((data.ev_meter.import_active_power/1000).toFixed(1) + " kW");
+              $('#evmeter_total_kwh').text((data.ev_meter.total_wh/1000).toFixed(1) + " kWh");
+              $('#evmeter_charged_kwh').text((data.ev_meter.charged_wh/1000).toFixed(1) + " kWh");
+            }
+
+            $('#solar_start_current').val(data.settings.solar_start_current);
+            $('#solar_max_import_current').val(data.settings.solar_max_import);
+            $('#solar_stop_time').val(data.settings.solar_stop_time);
+
+            if(data.settings.modem == "Experiment" || data.settings.modem == "QCA7000") {
+              $('.with_modem').show();
+            } else {
+              $('.with_modem').hide();
+            }
+
+            if (data.mqtt && !mqttEditMode) {
+                $('#mqtt_host').val(data.mqtt.host);
+                $('#mqtt_port').val(data.mqtt.port);
+                $('#mqtt_username').val(data.mqtt.username);
+                $('#mqtt_password').val(data.mqtt.password);
+                $('#mqtt_topic_prefix').val(data.mqtt.topic_prefix);
+                $('#mqtt_tls').prop('checked', data.mqtt.tls).checkboxradio("refresh");  // Set and refresh widget
+                $('#mqtt_ca_cert').val(data.mqtt.ca_cert || '');
+                toggleCertVisibility();
+            }
+
+            if (data.settings.lcdlock == 1) {
+              document.getElementById("lcdlock").checked = true;
+              document.getElementById("lcdlock_label").classList.remove("ui-checkbox-off")
+              document.getElementById("lcdlock_label").classList.add("ui-checkbox-on")
+            } else {
+              document.getElementById("lcdlock").checked = false;
+              document.getElementById("lcdlock_label").classList.remove("ui-checkbox-on")
+              document.getElementById("lcdlock_label").classList.add("ui-checkbox-off")
+            }            
+
+            if (data.settings.lock != 0) {
+              if (data.settings.cablelock == 1) {
+                  document.getElementById("cablelock").checked = true;
+                  document.getElementById("cablelock_label").classList.remove("ui-checkbox-off")
+                  document.getElementById("cablelock_label").classList.add("ui-checkbox-on")
+              } else {
+                  document.getElementById("cablelock").checked = false;
+                  document.getElementById("cablelock_label").classList.remove("ui-checkbox-on")
+                  document.getElementById("cablelock_label").classList.add("ui-checkbox-off")
+              }
+            } else {
+              $('[id=cablelock]').hide();
+              $('[id=cablelock_label]').hide();
+            }
+
+            if (data.ocpp) {
+              if (data.ocpp.mode == "Enabled") {
+                $('[id=ocpp_settings]').show();
+                document.getElementById("enable_ocpp").checked = true;
+                document.getElementById("enable_ocpp_label").classList.remove("ui-checkbox-off")
+                document.getElementById("enable_ocpp_label").classList.add("ui-checkbox-on")
+              } else {
+                $('[id=ocpp_settings]').hide();
+                document.getElementById("enable_ocpp").checked = false;
+                document.getElementById("enable_ocpp_label").classList.remove("ui-checkbox-on")
+                document.getElementById("enable_ocpp_label").classList.add("ui-checkbox-off")
+              }
+
+              if (data.ocpp.auto_auth == "Enabled") {
+                $('[id=ocpp_auto_auth_idtag_wrapper]').show();
+                document.getElementById("ocpp_auto_auth").checked = true;
+                document.getElementById("ocpp_auto_auth_label").classList.remove("ui-checkbox-off")
+                document.getElementById("ocpp_auto_auth_label").classList.add("ui-checkbox-on")
+              } else {
+                $('[id=ocpp_auto_auth_idtag_wrapper]').hide();
+                document.getElementById("ocpp_auto_auth").checked = false;
+                document.getElementById("ocpp_auto_auth_label").classList.remove("ui-checkbox-on")
+                document.getElementById("ocpp_auto_auth_label").classList.add("ui-checkbox-off")
+              }
+
+              if (!ocppEditMode) {
+                $('#ocpp_backend_url').val(data.ocpp.backend_url);
+                $('#ocpp_cb_id').val(data.ocpp.cb_id);
+                $('#ocpp_auth_key').val(data.ocpp.auth_key);
+                $('#ocpp_auto_auth_idtag').val(data.ocpp.auto_auth_idtag);
+              }
+
+              $('#ocpp_ws_status').text(data.ocpp.status);
+
+            } else {
+              $('[id=ocpp_config_outer]').hide();
+            }
+
+            setTimeout(loadData, 5000);
+          });
+      }
+
+      // When the tab becomes visible again, refresh data immediately and
+      // reconnect the LCD websocket if it was stopped while the tab was hidden.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          loadData();
+          if (window.lcdReconnectIfNeeded) window.lcdReconnectIfNeeded();
+        }
+      });
+
+      // Add event listener for TLS checkbox
+      $(document).on('change', '#mqtt_tls', toggleCertVisibility);
+  </script>
+
+
+  <!-- Page Wrapper -->
+  <div id="wrapper">
+      <!-- Content Wrapper -->
+      <div id="content-wrapper" class="d-flex flex-column">
+          <!-- Main Content -->
+          <div id="content">
+              <!-- Begin Page Content -->
+              <div class="container-fluid">
+                  <div style="margin-bottom: 20px;">
+                    <div class="card bg-success text-white shadow">
+                        <div class="card-body">
+                          <h1 class="h3 mb-0 text-white-800">Smart EVSE V3</h1>
+                          <h1 class="h5 mb-0 text-white-800">
+                            <span id="version-label">Version:</span>
+                            <span id="version" data-version=""></span>
+                          </h1>
+                          <h1 id="serialnr" class="h5 mb-0 text-white-800">SmartEVSE-</h1>
+                        </div>
+                    </div>
+                </div>
+
+                  <div class="row">
+
+                    <!-- Earnings (Monthly) Card Example -->
+                    <div class="col-md-6" style="margin-bottom: 20px;">
+                        <div class="card border-left-primary shadow h-100 py-2">
+                            <div class="card-body">
+                                <div class="row no-gutters align-items-center">
+                                    <div class="col mr-2">
+                                        <div class="text font-weight-bold text-primary text-uppercase mb-1">EVSE</div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              Mode:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="mode"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center" id="loadbl">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              Power Sharing:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="loadbl_node"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center with_modem">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                                Duty cycle:
+                                            </div>
+                                            <div class="col">
+                                                <div class="h5 mb-0 mr-3 text-gray-800" id="dutycycle"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              Connected:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="car_connected"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              State:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="state"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center" id="with_errors">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              Error:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="error"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center" id="show_rfid">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              RFID:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="rfid"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              Charge:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="charge_current"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              Temp:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="temp"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              MQTT:
+                                          </div>
+                                          <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="mqtt"></div>
+                                          </div>
+                                      </div>
+                                        <div class="row no-gutters align-items-center" id="contactor2">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              Contactor 2:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="enable_C2"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              StartTime:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="starttime_date_time"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              StopTime:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="stoptime_date_time"></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 140px;">
+                                              Repeat:
+                                            </div>
+                                            <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="repeat"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                  <!--  <div class="col-auto">
+                                  //      <i class="fas fa-calendar fa-2x text-gray-300">
+                                  //        <svg style="width:48px;height:48px" viewBox="0 0 24 24">
+                                  //          <path fill="currentColor" d="M17.3 5C19 6.5 20 8.6 20 11C20 15.4 16.4 19 12 19S4 15.4 4 11C4 8.6 5.1 6.5 6.7 5H17.3M18 3H6L5.4 3.5C3.2 5.4 2 8.1 2 11C2 16.5 6.5 21 12 21S22 16.5 22 11C22 8.1 20.8 5.4 18.6 3.5L18 3M13 7.5C13 8.3 13.7 9 14.5 9S16 8.3 16 7.5 15.3 6 14.5 6 13 6.7 13 7.5M8 7.5C8 8.3 8.7 9 9.5 9S11 8.3 11 7.5 10.3 6 9.5 6 8 6.7 8 7.5M7 13C8.1 13 9 12.1 9 11C9 9.9 8.1 9 7 9S5 9.9 5 11C5 12.1 5.9 13 7 13M11.5 15C11.5 13.9 10.6 13 9.5 13S7.5 13.9 7.5 15C7.5 16.1 8.4 17 9.5 17S11.5 16.1 11.5 15M12 13C13.1 13 14 12.1 14 11C14 9.9 13.1 9 12 9S10 9.9 10 11C10 12.1 10.9 13 12 13M16.5 15C16.5 13.9 15.6 13 14.5 13S12.5 13.9 12.5 15C12.5 16.1 13.4 17 14.5 17S16.5 16.1 16.5 15M19 11C19 9.9 18.1 9 17 9S15 9.9 15 11C15 12.1 15.9 13 17 13S19 12.1 19 11" />
+                                  //        </svg>
+                                  //      </i>
+                                  //  </div> -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                      <div class="col-md-6" style="margin-bottom: 20px;">
+                          <div class="card border-left-primary shadow h-100 py-2">
+                              <div class="card-body">
+                                  <div class="row no-gutters align-items-center">
+                                      <div class="lcd" id="lcd">
+                                          <img class="lcd-device" src="SmartEVSE.webp" width="401" height="600" alt=""/>
+                                          <img class="lcd-screen is-hidden" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAmMBgX1lyz4AAAAASUVORK5CYII=" width="256" height="128" alt="" />
+                                          <div class="lcd-activate" data-state="info">Starting websocket...</div>
+                                          <div class="lcd-display-buttons">
+                                              <button type="button" data-name="left">Left</button>
+                                              <button type="button" data-name="middle">Middle</button>
+                                              <button type="button" data-name="right">Right</button>
+                                          </div>
+                                          <div class="lcd-buttons">
+                                              <button type="button" data-name="left">Left</button>
+                                              <button type="button" data-name="middle">Middle</button>
+                                              <button type="button" data-name="right">Right</button>
+                                          </div>
+
+                                        <div class="lcd-status">
+                                          <form class="lcd-password" id="lcd-password-form">
+                                            <input type="password" id="lcd-password" class="form-control"
+                                                                                     placeholder="Enter PIN"
+                                                                                     inputmode="numeric"
+                                                                                     autocomplete="off"
+                                                                                     maxlength="4"
+                                                                                     pattern="[0-9]{4}">
+                                            <button type="submit" id="lcd-password-submit">Unlock</button>
+                                          </form>
+                                          <div class="lcd-lock-status" id="lcd-lock-status">
+                                            Locked - Enter PIN
+                                          </div>
+                                          <div id="lcd-lock-hint">
+                                            LCD buttons are locked. Enter your PIN to unlock them.
+                                          </div>
+                                        </div>
+                                      </div>
+<script>
+    (() => {
+        const LCD_SCREEN = document.querySelector('#lcd .lcd-screen');
+        const LCD_BUTTON_CONTAINERS = document.querySelectorAll('#lcd .lcd-buttons, #lcd .lcd-display-buttons');
+        const LCD_ACTIVATE = document.querySelector('#lcd .lcd-activate');
+        const PASSWORD_FIELD = document.querySelector('#lcd-password');
+        const PASSWORD_FORM = document.querySelector('#lcd-password-form');
+        const LOCK_STATUS = document.querySelector('#lcd-lock-status');
+        const LOCK_HINT = document.querySelector('#lcd-lock-hint');
+        const SESSION_STORAGE_PIN_KEY = 'lcdPinCode';
+        const LOCKED_PRESS_ALERT_THRESHOLD = 3;
+        const MIN_BUTTON_PRESS_MS = 300;
+        const WS_MAX_CONNECT_ATTEMPTS = 3;
+        const WS_CONNECTED_STATUS_MS = 2000;
+        const WS_RETRY_DELAY_MS = 2000;
+        const WS_CONNECT_TIMEOUT_MS = 8000;
+        const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/lcd`;
+        let passwordVerified = false;
+        let blockedButtonPressCount = 0;
+        let lcdSocket = null;
+        let reconnectTimer = null;
+        let connectTimeoutTimer = null;
+        let activateOverlayHideTimer = null;
+        let activeFrameUrl = null;
+        let wsAttemptCount = 0;
+        let wsStopped = false;
+        let wsErrorText = '';
+        const activePointers = new Map();
+
+        /**
+         * Update the LCD overlay text and make sure it is visible.
+         *
+         * @param {string} text Overlay text to display.
+         * @param {'info'|'warning'|'error'} [state='info'] Visual state for the overlay.
+         * @returns {void}
+         */
+        function setActivateText(text, state = 'info') {
+            clearActivateOverlayHideTimer();
+            if (LCD_ACTIVATE) {
+                LCD_ACTIVATE.textContent = text;
+                LCD_ACTIVATE.dataset.state = state;
+                LCD_ACTIVATE.classList.remove('is-hidden');
+            }
+        }
+
+        /**
+         * Cancel any pending timer that would hide the LCD overlay.
+         *
+         * @returns {void}
+         */
+        function clearActivateOverlayHideTimer() {
+            if (activateOverlayHideTimer !== null) {
+                window.clearTimeout(activateOverlayHideTimer);
+                activateOverlayHideTimer = null;
+            }
+        }
+
+        /**
+         * Hide the LCD overlay after a delay once the websocket is healthy.
+         *
+         * @param {number} delayMs Delay in milliseconds before hiding the overlay.
+         * @returns {void}
+         */
+        function hideActivateOverlayAfterDelay(delayMs) {
+            clearActivateOverlayHideTimer();
+            activateOverlayHideTimer = window.setTimeout(() => {
+                activateOverlayHideTimer = null;
+                hideActivateOverlay();
+            }, delayMs);
+        }
+
+        /**
+         * Hide the LCD overlay immediately.
+         *
+         * @returns {void}
+         */
+        function hideActivateOverlay() {
+            clearActivateOverlayHideTimer();
+            if (LCD_ACTIVATE) {
+                LCD_ACTIVATE.classList.add('is-hidden');
+            }
+        }
+
+        /**
+         * Show the current websocket state together with retry details.
+         *
+         * @param {string} prefix Status text to display before retry details.
+         * @param {'info'|'warning'|'error'} [state='info'] Visual state for the overlay.
+         * @returns {void}
+         */
+        function setWsStatus(prefix, state = 'info') {
+          const attemptNumber = Math.min(wsAttemptCount + 1, WS_MAX_CONNECT_ATTEMPTS);
+          const details = wsErrorText ? `\n${wsErrorText}` : '';
+          if (attemptNumber > 1) {
+            setActivateText(`${prefix}\nAttempt ${attemptNumber}/${WS_MAX_CONNECT_ATTEMPTS}${details}`, state);
+          } else {
+            setActivateText(prefix, state);
+          }
+        }
+
+        /**
+         * Reset websocket retry bookkeeping before a fresh connection cycle.
+         *
+         * @returns {void}
+         */
+        function resetWsRetryState() {
+            wsAttemptCount = 0;
+            wsStopped = false;
+            wsErrorText = '';
+        }
+
+        /**
+         * Stop reconnect attempts and show the final websocket error.
+         *
+         * @param {string} errorText Final error message shown to the user.
+         * @returns {void}
+         */
+        function stopReconnectWithFinalError(errorText) {
+            wsStopped = true;
+            wsErrorText = errorText;
+            clearReconnectTimer();
+            clearConnectTimeout();
+            if (!document.hidden) {
+                setActivateText(`WebSocket failed after ${WS_MAX_CONNECT_ATTEMPTS} attempts.\n${errorText}`, 'error');
+            }
+        }
+
+        function clearConnectTimeout() {
+            if (connectTimeoutTimer !== null) {
+                window.clearTimeout(connectTimeoutTimer);
+                connectTimeoutTimer = null;
+            }
+        }
+
+        function clearReconnectTimer() {
+            if (reconnectTimer !== null) {
+                window.clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+        }
+
+        /**
+         * Restart the LCD websocket from a clean retry state.
+         *
+         * @returns {void}
+         */
+        function restartLCDWebSocket() {
+            resetWsRetryState();
+            clearReconnectTimer();
+            connectLCDWebSocket();
+        }
+
+        /**
+         * Queue the next websocket reconnect attempt if retries are still allowed.
+         *
+         * @returns {void}
+         */
+        function scheduleReconnect() {
+            if (wsStopped || reconnectTimer !== null) {
+                return;
+            }
+            setWsStatus('Reconnecting in 2s...', 'warning');
+            reconnectTimer = window.setTimeout(() => {
+                reconnectTimer = null;
+                connectLCDWebSocket();
+            }, WS_RETRY_DELAY_MS);
+        }
+
+        function getStoredPin() {
+            try {
+                return sessionStorage.getItem(SESSION_STORAGE_PIN_KEY);
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function storePin(pin) {
+            try {
+                sessionStorage.setItem(SESSION_STORAGE_PIN_KEY, pin);
+            } catch (e) {
+                // Ignore storage issues (e.g. restricted browser mode)
+            }
+        }
+
+        function clearStoredPin() {
+            try {
+                sessionStorage.removeItem(SESSION_STORAGE_PIN_KEY);
+            } catch (e) {
+                // Ignore storage issues (e.g. restricted browser mode)
+            }
+        }
+
+        /**
+         * Normalize a PIN value so validation always works on trimmed text.
+         *
+         * @param {unknown} pin PIN candidate from storage or user input.
+         * @returns {string} Trimmed PIN text or an empty string for invalid input types.
+         */
+        function normalizePin(pin) {
+            return typeof pin === 'string' ? pin.trim() : '';
+        }
+
+        /**
+         * Check whether a PIN is exactly four numeric digits.
+         *
+         * @param {string} pin PIN text to validate.
+         * @returns {boolean} True when the PIN contains exactly four digits.
+         */
+        function isValidPin(pin) {
+            return /^\d{4}$/.test(pin);
+        }
+
+        function updateLockUi(isUnlocked) {
+            if (isUnlocked) {
+                LOCK_STATUS.textContent = 'Unlocked';
+                LOCK_STATUS.style.color = '#1cc88a';
+                LOCK_HINT.textContent = 'Buttons are unlocked. You can use Left, Middle and Right.';
+            } else {
+                LOCK_STATUS.textContent = 'Locked - Enter PIN';
+                LOCK_STATUS.style.color = '#e74a3b';
+                LOCK_HINT.textContent = 'LCD buttons are locked. Enter your PIN to unlock them.';
+            }
+        }
+
+        /**
+         * Open the LCD websocket and manage retries, errors, and UI state.
+         *
+         * @returns {void}
+         */
+        function connectLCDWebSocket() {
+            if (lcdSocket && (lcdSocket.readyState === WebSocket.OPEN || lcdSocket.readyState === WebSocket.CONNECTING)) {
+                return;
+            }
+
+            if (wsAttemptCount >= WS_MAX_CONNECT_ATTEMPTS) {
+              wsErrorText = `connect timeout after ${WS_CONNECT_TIMEOUT_MS}ms`
+                stopReconnectWithFinalError(wsErrorText || 'connection failed');
+                return;
+            }
+            setWsStatus('Connecting to LCD...', 'info');
+
+            let socket;
+            try {
+                socket = new WebSocket(WS_URL);
+            } catch (error) {
+                wsAttemptCount += 1;
+                wsErrorText = `constructor error: ${error.message}`;
+                if (wsAttemptCount >= WS_MAX_CONNECT_ATTEMPTS) {
+                    stopReconnectWithFinalError(wsErrorText);
+                    return;
+                }
+                scheduleReconnect();
+                return;
+            }
+
+            lcdSocket = socket;
+            socket.binaryType = 'arraybuffer';
+
+            clearConnectTimeout();
+            connectTimeoutTimer = window.setTimeout(() => {
+                if (socket.readyState === WebSocket.CONNECTING) {
+                    wsErrorText = `connect timeout after ${WS_CONNECT_TIMEOUT_MS}ms`;
+                    socket.close();
+                }
+            }, WS_CONNECT_TIMEOUT_MS);
+
+            socket.onopen = () => {
+                clearConnectTimeout();
+                resetWsRetryState();
+                hideActivateOverlayAfterDelay(WS_CONNECTED_STATUS_MS);
+            };
+
+            socket.onmessage = (event) => {
+                if (!(event.data instanceof ArrayBuffer)) {
+                    return;
+                }
+                const frameUrl = URL.createObjectURL(new Blob([event.data], {type: 'image/bmp'}));
+                if (activeFrameUrl) {
+                    URL.revokeObjectURL(activeFrameUrl);
+                }
+                activeFrameUrl = frameUrl;
+                LCD_SCREEN.src = frameUrl;
+                LCD_SCREEN.classList.remove('is-hidden');
+            };
+
+            socket.onerror = () => {
+                wsErrorText = 'connection error';
+                if (socket.readyState !== WebSocket.CLOSED) {
+                    socket.close();
+                }
+            };
+
+            socket.onclose = (event) => {
+                clearConnectTimeout();
+                if (lcdSocket === socket) {
+                    lcdSocket = null;
+                }
+                if (event.code === 1000) {
+                    return;
+                }
+                wsAttemptCount += 1;
+                if (event.code === 1006) {
+                    wsErrorText = wsErrorText || 'connection lost';
+                } else if (!wsErrorText) {
+                    wsErrorText = `close code ${event.code}`;
+                }
+                if (wsAttemptCount >= WS_MAX_CONNECT_ATTEMPTS) {
+                    stopReconnectWithFinalError(wsErrorText);
+                    return;
+                }
+                scheduleReconnect();
+            };
+        }
+
+        /**
+         * Send a button press or release event to the LCD websocket.
+         *
+         * @param {string} btnName Logical LCD button name.
+         * @param {boolean} stateDown True when the button is pressed, false when released.
+         * @returns {void}
+         */
+        function sendButtonState(btnName, stateDown) {
+            if (!passwordVerified) {
+                blockedButtonPressCount += 1;
+                updateLockUi(false);
+                PASSWORD_FIELD.focus();
+                PASSWORD_FIELD.select();
+                if (blockedButtonPressCount >= LOCKED_PRESS_ALERT_THRESHOLD) {
+                    alert("Buttons are locked. Enter your PIN first to unlock.");
+                    blockedButtonPressCount = 0;
+                }
+                return;
+            }
+
+            if (!lcdSocket || lcdSocket.readyState !== WebSocket.OPEN) {
+                restartLCDWebSocket();
+                return;
+            }
+
+            lcdSocket.send(JSON.stringify({
+                button: btnName,
+                state: stateDown ? 1 : 0
+            }));
+        }
+
+        function releasePointerButton(pointerId) {
+            const pointerInfo = activePointers.get(pointerId);
+            if (!pointerInfo || pointerInfo.released) {
+                return;
+            }
+
+            pointerInfo.released = true;
+            const elapsed = Date.now() - pointerInfo.pressTime;
+            const sendRelease = () => {
+                sendButtonState(pointerInfo.button, false);
+                activePointers.delete(pointerId);
+            };
+
+            if (elapsed < MIN_BUTTON_PRESS_MS) {
+                window.setTimeout(sendRelease, MIN_BUTTON_PRESS_MS - elapsed);
+            } else {
+                sendRelease();
+            }
+        }
+
+        /**
+         * Verify the configured LCD PIN and optionally persist it for this session.
+         *
+         * @param {{password?: string, showErrorAlert?: boolean, rememberPin?: boolean}} [options={}] Verification overrides.
+         * @returns {void}
+         */
+        function verifyPassword(options = {}) {
+            const enteredPassword = normalizePin(options.password ?? PASSWORD_FIELD.value);
+            const showErrorAlert = options.showErrorAlert ?? true;
+            const rememberPin = options.rememberPin ?? true;
+            if (!isValidPin(enteredPassword)) {
+                passwordVerified = false;
+                updateLockUi(false);
+                if (rememberPin) {
+                    clearStoredPin();
+                }
+                if (showErrorAlert) {
+                    alert("Enter the 4-digit PIN.");
+                }
+                return;
+            }
+
+            $.post('/lcd-verify-password', { password: enteredPassword })
+            .done(function(data) {
+                if (data.success) {
+                    passwordVerified = true;
+                    blockedButtonPressCount = 0;
+                    updateLockUi(true);
+                    if (rememberPin) {
+                        storePin(enteredPassword);
+                    }
+                } else {
+                    passwordVerified = false;
+                    updateLockUi(false);
+                    clearStoredPin();
+                    if (showErrorAlert) {
+                        alert("Incorrect PIN. Please try again.");
+                    }
+                }
+            })
+            .fail(function() {
+                passwordVerified = false;
+                updateLockUi(false);
+                if (showErrorAlert) {
+                    alert("PIN verification failed. Please try again.");
+                }
+            });
+        }
+
+        PASSWORD_FORM.addEventListener('submit', event => {
+            event.preventDefault();
+            verifyPassword();
+        });
+
+        LCD_BUTTON_CONTAINERS.forEach(buttonContainer => {
+            buttonContainer.addEventListener('pointerdown', event => {
+                const button = event.target.closest('button[data-name]');
+                if (!button) {
+                    return;
+                }
+                event.preventDefault();
+                activePointers.set(event.pointerId, {
+                    button: button.dataset.name,
+                    pressTime: Date.now(),
+                    released: false
+                });
+                sendButtonState(button.dataset.name, true);
+            });
+        });
+
+        ['pointerup', 'pointercancel'].forEach(eventName => {
+            window.addEventListener(eventName, event => {
+                releasePointerButton(event.pointerId);
+            });
+        });
+
+        window.addEventListener('online', () => {
+            restartLCDWebSocket();
+        });
+
+        window.addEventListener('offline', () => {
+            setActivateText('Offline - waiting for network...', 'warning');
+        });
+
+        // Expose reconnect hook so the outer visibilitychange listener can call it.
+        window.lcdReconnectIfNeeded = () => {
+            if (wsStopped) restartLCDWebSocket();
+        };
+
+        const storedPin = getStoredPin();
+        if (isValidPin(storedPin)) {
+            PASSWORD_FIELD.value = storedPin;
+            verifyPassword({ password: storedPin, showErrorAlert: false, rememberPin: false });
+        } else {
+            clearStoredPin();
+            updateLockUi(false);
+        }
+
+        restartLCDWebSocket();
+    })();
+</script>
+                                  </div>
+                              </div>
+                          </div>
+                      </div>
+
+
+
+                    </div>
+                    <!-- END ROW -->
+                    <div class="row">
+
+                    <div class="col-xl-4 col-md-6 mb-4 with_modem">
+                        <div class="card border-left-danger shadow h-100 py-2">
+                            <div class="card-body">
+                                <div class="row no-gutters align-items-center">
+                                    <div class="col mr-2">
+                                        <div class="text-xl font-weight-bold text-info text-uppercase mb-1">EV State</div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 150px;">
+                                              EVCCID
+                                          </div>
+                                          <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="evccid" style="text-align: right;"></div>
+                                          </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 150px;">
+                                            <span title="Estimated / computed">Current SoC</span>
+                                          </div>
+                                          <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="computed_soc" style="text-align: right;"></div>
+                                          </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 150px;">
+                                              Initial SoC
+                                          </div>
+                                          <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="initial_soc" style="text-align: right;"></div>
+                                          </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 150px;">
+                                              Full SoC
+                                          </div>
+                                          <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="full_soc" style="text-align: right;"></div>
+                                          </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 150px;">
+                                            <span title="Estimated / computed">Est. full at</span>
+                                          </div>
+                                          <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="full_at" style="text-align: right;"></div>
+                                          </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 150px;">
+                                              Capacity
+                                          </div>
+                                          <div class="col">
+                                              <div class="h5 mb-0 mr-3 text-gray-800" id="energy_capacity" style="text-align: right;"></div>
+                                          </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-auto">
+                                      <i class="fas fa-clipboard-list fa-2x text-gray-300">
+                                        <svg style="width:48px;height:48px" viewBox="0 0 28.1 49.61" xmlns="http://www.w3.org/2000/svg">
+                                         <path fill="currentColor" d="m28.09 45.183c0.0041 2.4411-1.9714 4.4234-4.4125 4.4275h-19.25c-2.4418-0.008231-4.4193-1.9857-4.4275-4.4275l5e-14 -34.794c-0.0013809-2.4535 1.9865-4.4436 4.44-4.445h19.25c2.447 0.0055 4.4238 1.998 4.41 4.445zm-23.65 2.9275h19.215c1.6244 0.0028 2.9454-1.3081 2.955-2.9325v-34.794c-0.0055-1.6297-1.3253-2.9495-2.955-2.955h-19.215c-1.6346 0.0014-2.9597 1.3254-2.9625 2.96v34.794c0.012382 1.6253 1.3371 2.9344 2.9625 2.9275zm20.682-2.9325c0.0042 0.81657-0.65592 1.4811-1.4725 1.4825h-19.217c-0.816 0-1.4775-0.6615-1.4775-1.4775v-20.361c0.00138-0.81462 0.66288-1.4739 1.4775-1.4725h19.217c0.81267 0.0014 1.4711 0.65983 1.4725 1.4725zm-16.255-40.712c0.074087-2.7158 2.4778-4.7733 5.1725-4.4275 2.6969-0.34712 5.1042 1.7095 5.1825 4.4275z" />
+                                        </svg>
+                                      </i>
+                                  </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-xl-4 col-md-6 mb-4">
+                      <div class="card border-left-info shadow h-100 py-2">
+                          <div class="card-body">
+                              <div class="row no-gutters align-items-center">
+                                  <div class="col mr-2">
+                                      <div class="text-xl font-weight-bold text-info text-uppercase mb-1">Current Details</div>
+                                      <div class="row no-gutters align-items-center">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                            Override:
+                                          </div>
+                                          <div class="col">
+                                            <div class="h5 mb-0 mr-3 text-gray-800" id="override_current" style="text-align: right;"></div>
+                                          </div>
+                                      </div>
+                                      <div class="row no-gutters align-items-center">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                            Min:
+                                          </div>
+                                          <div class="col">
+                                            <div class="h5 mb-0 mr-3 text-gray-800" id="current_min" style="text-align: right;"></div>
+                                          </div>
+                                      </div>
+                                      <div class="row no-gutters align-items-center">
+                                          <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                            Max:
+                                          </div>
+                                          <div class="col">
+                                            <div class="h5 mb-0 mr-3 text-gray-800" id="current_max" style="text-align: right;"></div>
+                                          </div>
+                                      </div>
+                                  </div>
+                                  <div class="col-auto">
+                                      <i class="fas fa-clipboard-list fa-2x text-gray-300">
+                                        <svg style="width:48px;height:48px" viewBox="0 0 24 24">
+                                          <path fill="currentColor" d="M16.5,21C13.5,21 12.31,16.76 11.05,12.28C10.14,9.04 9,5 7.5,5C4.11,5 4,11.93 4,12H2C2,11.63 2.06,3 7.5,3C10.5,3 11.71,7.25 12.97,11.74C13.83,14.8 15,19 16.5,19C19.94,19 20.03,12.07 20.03,12H22.03C22.03,12.37 21.97,21 16.5,21Z" />
+                                      </svg>
+                                      </i>
+                                  </div>
+                              </div>
+                          </div>
+                      </div>
+                  </div>
+
+                  <div class="col-xl-4 col-md-6 mb-4 with_mainsmeter" style="display: none;">
+                    <div class="card border-left-success shadow h-100 py-2">
+                        <div class="card-body">
+                            <div class="row no-gutters align-items-center">
+                                <div class="col mr-2">
+                                    <div class="text-xl font-weight-bold text-info text-uppercase mb-1">Mains Phase Details</div>
+                                    <div class="row no-gutters align-items-center">
+                                      <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                          Total:
+                                        </div>
+                                        <div class="col">
+                                          <div class="h5 mb-0 mr-3 text-gray-800" id="phase_total" style="text-align: right;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center">
+                                      <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                          L1:
+                                        </div>
+                                        <div class="col">
+                                          <div class="h5 mb-0 mr-3 text-gray-800" id="phase_1" style="text-align: right;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center">
+                                      <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                          L2:
+                                        </div>
+                                        <div class="col">
+                                          <div class="h5 mb-0 mr-3 text-gray-800" id="phase_2" style="text-align: right;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center">
+                                      <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                          L3:
+                                        </div>
+                                        <div class="col">
+                                          <div class="h5 mb-0 mr-3 text-gray-800" id="phase_3" style="text-align: right;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center" id="with_p1_api_data_date">
+                                      <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                          Date:
+                                        </div>
+                                        <div class="col">
+                                          <div class="h5 mb-0 mr-3 text-gray-800" id="p1_data_date" style="text-align: right;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center" id="with_p1_api_data_time">
+                                      <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                          Time:
+                                        </div>
+                                        <div class="col">
+                                          <div class="h5 mb-0 mr-3 text-gray-800" id="p1_data_time" style="text-align: right;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center" id="with_mainsmeter_host" style="display: none;">
+                                      <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                          Hostname:
+                                        </div>
+                                        <div class="col">
+                                          <div class="h5 mb-0 mr-3 text-gray-800" id="mainsmeter_host" style="text-align: right;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-auto">
+                                    <i class="fas fa-clipboard-list fa-2x text-gray-300">
+                                      <svg style="width:48px;height:48px" viewBox="0 0 24 24">
+                                        <path fill="currentColor" d="M16.5,21C13.5,21 12.31,16.76 11.05,12.28C10.14,9.04 9,5 7.5,5C4.11,5 4,11.93 4,12H2C2,11.63 2.06,3 7.5,3C10.5,3 11.71,7.25 12.97,11.74C13.83,14.8 15,19 16.5,19C19.94,19 20.03,12.07 20.03,12H22.03C22.03,12.37 21.97,21 16.5,21Z" />
+                                    </svg>
+                                    </i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-xl-4 col-md-6 mb-4" id="with_homebattery">
+                  <div class="card border-left-success shadow h-100 py-2">
+                      <div class="card-body">
+                          <div class="row no-gutters align-items-center">
+                              <div class="col mr-2">
+                                  <div class="text-xl font-weight-bold text-info text-uppercase mb-1">Phase Details (Original)</div>
+                                  <div class="row no-gutters align-items-center">
+                                    <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                        Total:
+                                      </div>
+                                      <div class="col">
+                                        <div class="h5 mb-0 mr-3 text-gray-800" id="phase_original_total" style="text-align: right;"></div>
+                                      </div>
+                                  </div>
+                                  <div class="row no-gutters align-items-center">
+                                    <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                        L1:
+                                      </div>
+                                      <div class="col">
+                                        <div class="h5 mb-0 mr-3 text-gray-800" id="phase_original_1" style="text-align: right;"></div>
+                                      </div>
+                                  </div>
+                                  <div class="row no-gutters align-items-center">
+                                    <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                        L2:
+                                      </div>
+                                      <div class="col">
+                                        <div class="h5 mb-0 mr-3 text-gray-800" id="phase_original_2" style="text-align: right;"></div>
+                                      </div>
+                                  </div>
+                                  <div class="row no-gutters align-items-center">
+                                    <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                        L3:
+                                      </div>
+                                      <div class="col">
+                                        <div class="h5 mb-0 mr-3 text-gray-800" id="phase_original_3" style="text-align: right;"></div>
+                                      </div>
+                                  </div>
+                              </div>
+                              <div class="col-auto">
+                                  <i class="fas fa-clipboard-list fa-2x text-gray-300">
+                                    <svg style="width:48px;height:48px" viewBox="0 0 24 24">
+                                      <path fill="currentColor" d="M16.5,21C13.5,21 12.31,16.76 11.05,12.28C10.14,9.04 9,5 7.5,5C4.11,5 4,11.93 4,12H2C2,11.63 2.06,3 7.5,3C10.5,3 11.71,7.25 12.97,11.74C13.83,14.8 15,19 16.5,19C19.94,19 20.03,12.07 20.03,12H22.03C22.03,12.37 21.97,21 16.5,21Z" />
+                                  </svg>
+                                  </i>
+                              </div>
+                          </div>
+                      </div>
+                  </div>
+
+              </div>
+
+
+              <div class="col-xl-4 col-md-6 mb-4" id="with_evmeter" style="display: none;">
+                <div class="card border-left-warning shadow h-100 py-2">
+                    <div class="card-body">
+                        <div class="row no-gutters align-items-center">
+                            <div class="col mr-2">
+                                <div class="text-xl font-weight-bold text-info text-uppercase mb-1">EV Meter</div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      Description:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="evmeter_description" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center" id="with_evmeter_host" style="display: none;">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      Hostname:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="evmeter_host" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      Power:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="evmeter_power" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      Total kWh:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="evmeter_total_kwh" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                    Charged kWh:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="evmeter_charged_kwh" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-auto">
+                                <i class="fas fa-clipboard-list fa-2x text-gray-300">
+                                  <svg style="width:48px;height:48px" viewBox="0 0 24 24">
+                                    <path fill="currentColor" d="M17.3 5C19 6.5 20 8.6 20 11C20 15.4 16.4 19 12 19S4 15.4 4 11C4 8.6 5.1 6.5 6.7 5H17.3M18 3H6L5.4 3.5C3.2 5.4 2 8.1 2 11C2 16.5 6.5 21 12 21S22 16.5 22 11C22 8.1 20.8 5.4 18.6 3.5L18 3M13 7.5C13 8.3 13.7 9 14.5 9S16 8.3 16 7.5 15.3 6 14.5 6 13 6.7 13 7.5M8 7.5C8 8.3 8.7 9 9.5 9S11 8.3 11 7.5 10.3 6 9.5 6 8 6.7 8 7.5M7 13C8.1 13 9 12.1 9 11C9 9.9 8.1 9 7 9S5 9.9 5 11C5 12.1 5.9 13 7 13M11.5 15C11.5 13.9 10.6 13 9.5 13S7.5 13.9 7.5 15C7.5 16.1 8.4 17 9.5 17S11.5 16.1 11.5 15M12 13C13.1 13 14 12.1 14 11C14 9.9 13.1 9 12 9S10 9.9 10 11C10 12.1 10.9 13 12 13M16.5 15C16.5 13.9 15.6 13 14.5 13S12.5 13.9 12.5 15C12.5 16.1 13.4 17 14.5 17S16.5 16.1 16.5 15M19 11C19 9.9 18.1 9 17 9S15 9.9 15 11C15 12.1 15.9 13 17 13S19 12.1 19 11" />
+                                  </svg>
+                                </i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+              </div>
+
+
+              <div class="col-xl-4 col-md-6 mb-4" id="with_evmeter" style="display: none;">
+                <div class="card border-left-warning shadow h-100 py-2">
+                    <div class="card-body">
+                        <div class="row no-gutters align-items-center">
+                            <div class="col mr-2">
+                                <div class="text-xl font-weight-bold text-info text-uppercase mb-1">EV Meter currents</div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      Total:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="evmeter_currents_total" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      L1:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="evmeter_currents_1" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      L2:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="evmeter_currents_2" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      L3:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="evmeter_currents_3" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-auto">
+                                <i class="fas fa-clipboard-list fa-2x text-gray-300">
+                                  <svg style="width:48px;height:48px" viewBox="0 0 24 24">
+                                    <path fill="currentColor" d="M17.3 5C19 6.5 20 8.6 20 11C20 15.4 16.4 19 12 19S4 15.4 4 11C4 8.6 5.1 6.5 6.7 5H17.3M18 3H6L5.4 3.5C3.2 5.4 2 8.1 2 11C2 16.5 6.5 21 12 21S22 16.5 22 11C22 8.1 20.8 5.4 18.6 3.5L18 3M13 7.5C13 8.3 13.7 9 14.5 9S16 8.3 16 7.5 15.3 6 14.5 6 13 6.7 13 7.5M8 7.5C8 8.3 8.7 9 9.5 9S11 8.3 11 7.5 10.3 6 9.5 6 8 6.7 8 7.5M7 13C8.1 13 9 12.1 9 11C9 9.9 8.1 9 7 9S5 9.9 5 11C5 12.1 5.9 13 7 13M11.5 15C11.5 13.9 10.6 13 9.5 13S7.5 13.9 7.5 15C7.5 16.1 8.4 17 9.5 17S11.5 16.1 11.5 15M12 13C13.1 13 14 12.1 14 11C14 9.9 13.1 9 12 9S10 9.9 10 11C10 12.1 10.9 13 12 13M16.5 15C16.5 13.9 15.6 13 14.5 13S12.5 13.9 12.5 15C12.5 16.1 13.4 17 14.5 17S16.5 16.1 16.5 15M19 11C19 9.9 18.1 9 17 9S15 9.9 15 11C15 12.1 15.9 13 17 13S19 12.1 19 11" />
+                                  </svg>
+                                </i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+              </div>
+
+              <div class="col-xl-4 col-md-6 mb-4" id="with_homebattery" style="display: none;">
+                <div class="card border-left-warning shadow h-100 py-2">
+                    <div class="card-body">
+                        <div class="row no-gutters align-items-center">
+                            <div class="col mr-2">
+                                <div class="text-xl font-weight-bold text-info text-uppercase mb-1">Home Battery</div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                      Status:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="battery_status" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                      Current:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="battery_current" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                      Date:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="battery_last_update_date" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 100px;">
+                                      Time:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="battery_last_update_time" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-auto">
+                                <i class="fas fa-clipboard-list fa-2x text-gray-300">
+                                  <svg style="width:48px;height:48px" viewBox="0 0 24 24">
+                                    <path fill="currentColor" d="M16 20H8V6H16M16.67 4H15V2H9V4H7.33C6.6 4 6 4.6 6 5.33V20.67C6 21.4 6.6 22 7.33 22H16.67C17.41 22 18 21.41 18 20.67V5.33C18 4.6 17.4 4 16.67 4M15 16H9V19H15V16M15 7H9V10H15V7M15 11.5H9V14.5H15V11.5Z" />
+                                </svg>
+                                </i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+              </div>
+            </div>
+            <!-- END ROW -->
+              <div class="row">
+
+                <script>
+                    function SolStartCurr() {
+                      let val = $('#solar_start_current').val();
+                      $.post( "/settings?solar_start_current=" + val);
+                    }
+                    function SolImportCurr() {
+                      let val = $('#solar_max_import_current').val();
+                      $.post( "/settings?solar_max_import=" + val);
+                    }
+                    function SolStopTime() {
+                      let val = $('#solar_stop_time').val();
+                      $.post( "/settings?stop_timer=" + val);
+                    }
+
+                    /**
+                     * Activates a mode by sending configuration data to the server.
+                     * @param {0|1|2|3|4} mode - The operating mode to activate; off | normal | solar | smart | pause
+                     */
+                    function activate(mode) {
+                        const starttime = $qs('input[name="starttime"]').value;
+                        const stoptime = $qs('input[name="stoptime"]').value;
+                        const repeat2 = +$qs('#daily_repeat').checked;
+
+                        // Sanitize the user input.
+                        const params = new URLSearchParams({
+                            mode: `${mode}`,
+                            starttime: starttime,
+                            stoptime: stoptime,
+                            repeat: `${repeat2}`
+                        });
+                        if ([1,2,3].includes(mode)) {
+                            const override_current = $qs('#mode_override_current').value;
+                            params.append('override_current', `${override_current * 10}`);
+                        }
+                        void fetch(`${endpoint}?${params}`, {method: 'POST'});
+
+                        // Update the button state visually for immediate user feedback.
+                        // Backend sync will correct the state in case of failure.
+                        $qs('#mode').textContent = $qs(`#mode_${mode}`).textContent;
+                        for (let x of [0, 1, 2, 3, 4]) {
+                            $qs(`#mode_${x}`).classList.toggle('ui-btn-active', x === mode);
+                        }
+                    }
+
+                    function toggleMqttEdit() {
+                        mqttEditMode = !mqttEditMode;
+                        $('.mqtt_settings').toggle();
+                        if (mqttEditMode) {
+                            $('#edit_mqtt_button').text("Close Settings")
+                            $.get("/mqtt_ca_cert", function(certData) {
+                                $('#mqtt_ca_cert').val(certData);
+                            });
+                        } else {
+                            $('#edit_mqtt_button').text("Edit Settings")
+                        }
+                    }
+                    function configureMqtt() {
+                        var params = {
+                            mqtt_update:       1,
+                            mqtt_host:         $('#mqtt_host').val(),
+                            mqtt_port:         $('#mqtt_port').val(),
+                            mqtt_username:     $('#mqtt_username').val(),
+                            mqtt_password:     $('#mqtt_password').val(),
+                            mqtt_topic_prefix: $('#mqtt_topic_prefix').val(),
+                            mqtt_tls:          $('#mqtt_tls').is(':checked') ? 1 : 0,
+                            mqtt_ca_cert:      $('#mqtt_ca_cert').val()
+                        };
+                        // Build query string with proper encoding
+                        var query = Object.keys(params)
+                            .map(k => k + "=" + encodeURIComponent(params[k]))
+                            .join("&");
+
+                        $.post("/settings?" + query);
+                        alert('Settings applied');
+                        toggleMqttEdit();
+                        event.preventDefault();
+                    }
+                    function toggleLCDlock() {
+                      var LCDlockCheckbox = document.getElementById("lcdlock");
+                      $.post( "/settings?lcdlock=" + (LCDlockCheckbox.checked == true ? 1 : 0));
+                    }
+                    function toggleCableLock() {
+                      var CableLockCheckbox = document.getElementById("cablelock");
+                      $.post( "/settings?cablelock=" + (CableLockCheckbox.checked == true ? 1 : 0));
+                    }
+                    function toggleEnableOcpp() {
+                      var enableOcppCheckbox = document.getElementById("enable_ocpp");
+                      $.post( "/settings?ocpp_update=1&ocpp_mode=" + (enableOcppCheckbox.checked == true ? 1 : 0));
+                    }
+                    function toggleEnableOcppAutoAuth() {
+                      var autoAuthCheckbox = document.getElementById("ocpp_auto_auth");
+                      $.post( "/settings?ocpp_update=1&ocpp_auto_auth=" + (autoAuthCheckbox.checked == true ? 1 : 0));
+                      //show idTag box immediately if Auto auth checkbox is checked
+                      if (autoAuthCheckbox.checked) {
+                        loadData();
+                      }
+                    }
+                    function toggleOcppEdit() {
+                        ocppEditMode = !ocppEditMode;
+                        if (ocppEditMode) {
+                            $('#ocpp_save_btn').text("Save");
+                            $('#ocpp_backend_url').prop("disabled",false);
+                            $('#ocpp_cb_id').prop("disabled",false);
+                            $('#ocpp_auth_key').prop("disabled",false);
+                            $('#ocpp_auto_auth').prop("disabled",false);
+                            $('#ocpp_auto_auth_label').prop("disabled",false);
+                            $('#ocpp_auto_auth_idtag').prop("disabled",false);
+                            document.getElementById("ocpp_backend_url").classList.remove("ui-state-disabled");
+                            document.getElementById("ocpp_cb_id").classList.remove("ui-state-disabled");
+                            document.getElementById("ocpp_auth_key").classList.remove("ui-state-disabled");
+                            document.getElementById("ocpp_auto_auth").classList.remove("ui-state-disabled");
+                            document.getElementById("ocpp_auto_auth_label").classList.remove("ui-state-disabled");
+                            document.getElementById("ocpp_auto_auth_idtag").classList.remove("ui-state-disabled");
+                        } else {
+                            configureOcpp();
+                            $('#ocpp_save_btn').text("Edit Settings");
+                            $('#ocpp_backend_url').prop("disabled",true);
+                            $('#ocpp_cb_id').prop("disabled",true);
+                            $('#ocpp_auth_key').prop("disabled",true);
+                            $('#ocpp_auto_auth').prop("disabled",true);
+                            $('#ocpp_auto_auth_label').prop("disabled",true);
+                            $('#ocpp_auto_auth_idtag').prop("disabled",true);
+                            document.getElementById("ocpp_backend_url").classList.add("ui-state-disabled");
+                            document.getElementById("ocpp_cb_id").classList.add("ui-state-disabled");
+                            document.getElementById("ocpp_auth_key").classList.add("ui-state-disabled");
+                            document.getElementById("ocpp_auto_auth").classList.add("ui-state-disabled");
+                            document.getElementById("ocpp_auto_auth_label").classList.add("ui-state-disabled");
+                            document.getElementById("ocpp_auto_auth_idtag").classList.add("ui-state-disabled");
+                        }
+                    }
+                    function configureOcpp() {
+                        var params = {
+                            ocpp_update:          1,
+                            ocpp_backend_url:     $('#ocpp_backend_url').val(),
+                            ocpp_cb_id:           $('#ocpp_cb_id').val(),
+                            ocpp_auth_key:        $('#ocpp_auth_key').val(),
+                            ocpp_auto_auth_idtag: $('#ocpp_auto_auth_idtag').val()
+                        };
+                        // Build query string with proper encoding
+                        var query = Object.keys(params)
+                            .map(k => k + "=" + encodeURIComponent(params[k]))
+                            .join("&");
+
+                        $.post("/settings?" + query);
+                        event.preventDefault();
+                    }
+                    function reboot(event) {
+                      event?.preventDefault();
+                      let httpStatus;
+                      fetch("/reboot")
+                          .then(response => {
+                            httpStatus = response.status;
+                            return response.text();
+                          })
+                          .then(message => {
+                            document.body.innerHTML = `<div id="rebootMsg" class="alert alert-success" role="alert"></div>`;
+                            document.querySelector('#rebootMsg').innerText = message
+                            if (httpStatus === 200) {
+                              setInterval(() => document.querySelector('#rebootMsg').innerText += '.', 500);
+                              // Keep retrying until the device responds.
+                              setInterval(() => window.location.reload(), 5000);
+                            } else {
+                              document.querySelector('#rebootMsg').innerHTML
+                                  += '<br><br><a href="#" class="alert-link" onclick="window.location.reload()">Return to webinterface</a>';
+                            }
+                          })
+                          .catch(error => {
+                            document.body.innerHTML = `<div id="errorMsg" class="alert alert-danger" role="alert"></div>`;
+                            document.querySelector('#errorMsg').innerText = `Error: ${error}`;
+                          });
+                    }
+
+                    function gotoDoc(event) {
+                        const version = $('#version').data('version') || '';
+                        const gitHub = `https://github.com/dingo35/SmartEVSE-3.5/tree/`;
+                        const docPath = version.startsWith('v') ? version : 'master?tab=readme-ov-file';
+                        window.location.href = `${gitHub}${docPath}#documentation`;
+                        event?.preventDefault();
+                    }
+
+                    function postPWM(value) {
+                       $.post("/settings?override_pwm=" + value);
+                       event.preventDefault();
+                     }
+                     function postRequiredEVCCID() {
+                      var required_evccid=$('#required_evccid').val();
+                       $.post("/settings?required_evccid=" + required_evccid);
+                       event.preventDefault();
+                     }
+                </script>
+
+                <!-- Earnings (Monthly) Card Example -->
+                <div style="margin-bottom: 20px;">
+                    <div class="card border-left-primary shadow h-100 py-2">
+                        <div class="card-body">
+                            <div class="row no-gutters align-items-center">
+                                <div class="col mr-2">
+                                    <div class="text font-weight-bold text-primary text-uppercase mb-1">Control</div>
+<!--
+                                      <div class="row no-gutters align-items-center" id="loadbl_text">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                         Load Balance:
+                                        </div>
+                                      <div class="col h5 mb-0 mr-3 font-weight-bold text-gray-800">
+                                          <span id="loadbl_text_slave">Slave node - control is disabled, perform changes on Master node.</span>
+                                          <span id="loadbl_text_master">Master node - control changes are propagated to Slave node(s).</span>
+                                      </div>
+                                    </div>
+-->                                    
+                                    <div class="row no-gutters align-items-center">
+                                        <div class="col-auto h5 mb-0 mr-3" style="width:120px;">
+                                          <div class="tooltip tooltip--align-start font-weight-bold text-gray-800"
+                                               aria-describedby="tip-mode" tabindex="0">Mode:
+                                            <span id="tip-mode" class="tooltiptext" role="tooltip">
+                                              NORMAL: basic charging<br>
+                                              SOLAR: Use Solar surplus power<br>
+                                              SMART: Take home consumers into account</span>
+                                          </div>
+                                        </div>
+                                        <div class="col">
+                                          <form class="form-inline" id="form_mode">
+
+                                            <button id="mode_0" type="button" onclick="activate(0)">OFF</button>
+                                            <button id="mode_4" type="button" onclick="activate(4)">PAUSE</button>
+                                            <button id="mode_1" type="button" onclick="activate(1)">NORMAL</button>
+                                            <button id="mode_2" type="button" class="with_mainsmeter" onclick="activate(2)">SOLAR</button>
+                                            <button id="mode_3" type="button" class="with_mainsmeter" onclick="activate(3)">SMART</button>
+
+                                            <div class="form-group">
+                                              <label for="starttime" class="tooltip" aria-describedby="tip-starttime" tabindex="0">...STARTING:
+                                                <span id="tip-starttime" class="tooltiptext" role="tooltip">For delayed start, fill START and END date and time, then press NORMAL/SOLAR/SMART button to initiate.</span>
+                                              </label>
+                                              <input type="datetime-local" id="starttime" name="starttime" class="form-control">
+                                            </div>
+                                            <div class="form-group" id="stoptime_group">
+                                              <label for="stoptime" class="tooltip" aria-describedby="tip-stoptime" tabindex="0">...ENDING:
+                                                <span id="tip-stoptime" class="tooltiptext" role="tooltip">For programmed stop, fill START and END date and time, then press NORMAL/SOLAR/SMART button to initiate.</span>
+                                              </label>
+                                              <input type="datetime-local" id="stoptime" name="stoptime" class="form-control">
+                                            </div>
+                                            <div class="form-group" id="daily_repeat_group">
+                                              <label for="daily_repeat"> Daily</label>
+                                              <div class="input-group">
+                                                <input type="checkbox" id="daily_repeat" name="daily_repeat" class="form-control" value="daily" style="max-width: 60px;">
+                                              </div>
+                                            </div>
+                                          </form>
+                                        </div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center with_solar">
+                                      <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Solar:</div>
+                                      <div class="col">
+                                        <div class="mb-0"><div class="d-inline-flex align-items-center"><label style="width:100px;" for="solar_start_current">Start Current   </label><input type="number" onchange="SolStartCurr()" id="solar_start_current" name="solar_start_current" min="0" max="16" style="width:80px;" class="ui-corner-all ui-shadow-inset"/>&nbsp;A</div></div>
+                                        <div class="mb-0"><div class="d-inline-flex align-items-center"><label style="width:100px;" for="solar_max_import_current">Max Import </label><input type="number" onchange="SolImportCurr()" id="solar_max_import_current" name="solar_max_import_current" min="0" max="16" style="width:80px;" class="ui-corner-all ui-shadow-inset"/>&nbsp;A</div></div>
+                                        <div class="mb-0"><div class="d-inline-flex align-items-center"><label style="width:100px;" for="solar_stop_time">Stop Time           </label><input type="number" onchange="SolStopTime()" id="solar_stop_time" name="solar_stop_time" min="0" style="width:80px;" class="ui-corner-all ui-shadow-inset"/>&nbsp;minutes</div></div>
+                                      </div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center">
+                                      <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width:120px;" id="override_current_box">
+                                        <div class="tooltip tooltip--align-start font-weight-bold text-gray-800"
+                                             aria-describedby="tip-override" tabindex="0">Override:
+                                          <span id="tip-override" class="tooltiptext" role="tooltip">Override (limit) output current.<br>Select one and press NORMAL / SMART to set.</span>
+                                        </div>
+                                      </div>
+                                        <div class="col" id="override_current_box2" style="max-width:425px;">
+                                          <select id="mode_override_current">
+                                              <!--<option value="0">No Override</option>-->
+                                          </select>
+                                        </div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                          Actions:
+                                        </div>
+                                        <div class="col form-inline">
+                                          <a class="ui-btn ui-shadow ui-corner-all" href="/reboot" onclick="reboot(event)" data-ajax="false" title="Reboot your device">Reboot</a>
+                                          <a class="ui-btn ui-shadow ui-corner-all" href="/update" data-ajax="false" title="Update your firmware">Update</a>
+                                          <a class="ui-btn ui-shadow ui-corner-all" href="/?raw=1" data-ajax="false" title="Display your settings in JSON format">Raw Data</a>
+                                          <a class="ui-btn ui-shadow ui-corner-all" href="capacity.html" data-ajax="false" title="Advanced users only: adapt Capacity settings">Capacity</a>
+                                          <a class="ui-btn ui-shadow ui-corner-all" href="#" onclick="gotoDoc(event)" title="Show the online documentation">Help</a>
+                                        </div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center">
+                                      <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                        Lock:
+                                      </div>
+                                      <div class="col form-inline">
+                                        <input type="checkbox" id="lcdlock" onclick="toggleLCDlock()">
+                                        <label class="form-check-label" style="width: 140px; display:inline-block;" for="lcdlock" id="lcdlock_label" title="Lock buttons on LCD screen">LCD Lock</label>
+                                        <input type="checkbox" id="cablelock" onclick="toggleCableLock()">
+                                        <label class="form-check-label" style="width: 155px; display:inline-block;" for="cablelock" id="cablelock_label" title="Lock cable with actuator on EVSE side">Cable Lock</label>
+                                      </div>
+                                    </div> 
+                                    <div class="row no-gutters align-items-center with_modem">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                            Override PWM:
+                                        </div>
+                                        <div class="col">
+                                          <form class="form-inline" id="form_pwm">
+                                            <button onclick="postPWM(0)" style="width: 120px; display:inline-block;">0&#37;</button>
+                                            <button onclick="postPWM(50)" style="width: 120px; display:inline-block;">5&#37;</button>
+                                            <button onclick="postPWM(1024)" style="width: 120px; display:inline-block;">100&#37;</button>
+                                            <button onclick="postPWM(-1)" style="width: 120px; display:inline-block;">reset</button>
+                                          </form>
+                                        </div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center with_modem">
+                                      <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                          Autocharge:
+                                      </div>
+                                      <div class="col">
+                                        <form class="form-inline" id="form_required_evccid">
+                                          <input placeholder="EVCCID to require" id="required_evccid">
+                                          <button onclick="postRequiredEVCCID()" style="width: 120px; display:inline-block;">Update</button>
+                                        </form>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                  <div style="margin-bottom: 20px;" class="config">
+                      <div class="card border-left-primary shadow h-100 py-2">
+                        <div class="card-body">
+                            <div class="row no-gutters align-items-center">
+                                <div class="col mr-2">
+                                    <div class="text font-weight-bold text-primary text-uppercase mb-1">Config</div>
+                                    <div class="row no-gutters align-items-center" id="mqtt_config">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                            MQTT:
+                                        </div>
+                                        <div class="col">
+                                                <button onclick="toggleMqttEdit()" style="display:inline-block;" id="edit_mqtt_button">Edit Settings</button>
+                                            <div class="mqtt_settings" style="display:none">
+                                                <label>Host: <input id="mqtt_host" title="Leave empty to disable MQTT"></label>
+                                                <label>Port: <input id="mqtt_port" title="Usually 1883 for MQTT, and 8883 for secure MQTTS"></label>
+                                                <label>Username: <input id="mqtt_username" title="Leave empty for anonymous MQTT"></label>
+                                                <label>Password: <input id="mqtt_password" title="Leave empty for anonymous MQTT"></label>
+                                                <label>Topic Prefix: <input id="mqtt_topic_prefix"></label>
+                                                <label>Enable TLS: <input type="checkbox" id="mqtt_tls" value="1"></label>
+                                                <div id="mqtt_ca_cert_wrapper" style="display:none;">
+                                                    <label>CA Certificate (PEM): <textarea id="mqtt_ca_cert" rows="10" style="width:100%; font-family:monospace;" title="Paste the PEM-formatted CA certificate here for TLS. if left empty, LetsEncrypt will be used as default"></textarea></label>
+                                                </div>
+                                                <button onclick="configureMqtt()" style="display:inline-block;">Save</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                  </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="ocpp_config_outer" style="margin-bottom: 20px;" class="config">
+                      <div class="card border-left-primary shadow h-100 py-2">
+                        <div class="card-body">
+                            <div class="row no-gutters align-items-center">
+                                <div class="col mr-2">
+                                    <div class="text font-weight-bold text-primary text-uppercase mb-1">Config</div>
+                                    <div class="row no-gutters align-items-center" id="ocpp_config">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                            OCPP:
+                                        </div>
+                                        <div class="col">
+                                        <input type="checkbox" class="form-check-input" id="enable_ocpp" onclick="toggleEnableOcpp()">
+                                          <label class="form-check-label" for="enable_ocpp" id="enable_ocpp_label" title="Check to enable connection to a backoffice provider">Enable OCPP</label>
+                                          <div id="ocpp_settings" style="display: none;">
+                                              <div class="row no-gutters align-items-center" style="margin-top:20px;margin-bottom:10px">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 200px">
+                                                    WebSocket status:
+                                                </div>
+                                                <div class="col">
+                                                  <div class="h5 mb-0 mr-3 text-gray-800" id="ocpp_ws_status"></div>
+                                                </div>
+                                              </div>
+                                              <label>Backend URL: <input id="ocpp_backend_url" class="ui-state-disabled" title="Enter URL that your provider provided, up until the last /"></label>
+                                              <label>Charge Box Id: <input id="ocpp_cb_id" class="ui-state-disabled" title="Identifies your charger; enter URL part after the last / of the URL your provider gave you"></label>
+                                              <label>Password(optional): <input id="ocpp_auth_key" class="ui-state-disabled" title="Only necessary for SP2 connections"></label>
+                                              <div class="row no-gutters align-items-center" style="margin-top:20px;margin-bottom:10px">
+                                                <div class="col-auto mb-0 mr-3" style="width: 200px">
+                                                  <input type="checkbox" class="form-check-input ui-state-disabled" id="ocpp_auto_auth" onclick="toggleEnableOcppAutoAuth()">
+                                                  <label class="form-check-label ui-state-disabled" for="ocpp_auto_auth" id="ocpp_auto_auth_label">Auto-authorize</label>
+                                                </div>
+                                                <div class="col">
+                                                  <div class="mb-0" id="ocpp_auto_auth_idtag_wrapper">
+                                                    <input id="ocpp_auto_auth_idtag" class="ui-state-disabled" placeholder="Default idTag">
+                                                  </div>
+                                                </div>
+                                              </div>
+                                              <button id="ocpp_save_btn" onclick="toggleOcppEdit()" style="display:inline-block;">Edit Settings</button>
+                                          </div>
+                                        </div>
+                                    </div>
+                                  </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+      </div>
+  </div>
+  <script>
+    if (!window.isRawDataPage) {
+      // Get the current date and time
+      var now = new Date();
+      $('[id=stoptime_group]').hide();
+      $('[id=daily_repeat_group]').hide();
+
+      // Format the date and time as a string that can be used as the value of the input field
+      var dateString = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' + ('0' + now.getDate()).slice(-2);
+      var timeString = ('0' + now.getHours()).slice(-2) + ':' + ('0' + now.getMinutes()).slice(-2);
+      var dateTimeString = dateString + 'T' + timeString;
+
+      // Set the value of the input field to the current date and time
+      document.getElementById('starttime').value = dateTimeString;
+      document.getElementById('stoptime').value = dateTimeString;
+      document.getElementById('starttime').onchange = function () {
+          $('[id=stoptime_group]').show();
+      }
+      document.getElementById('stoptime').onchange = function () {
+          $('[id=daily_repeat_group]').show();
+      }
+      $('daily_repeat').prop('checked', false);
+    }
+  </script>
+</body>
+</html>

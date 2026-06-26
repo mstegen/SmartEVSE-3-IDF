@@ -1,0 +1,64 @@
+SmartEVSE-3 v3 firmware — flashing instructions
+================================================
+
+The project has migrated from Arduino / PlatformIO (which was locked to
+ESP-IDF v4.4.7) to **native ESP-IDF v6.0.1**. Build and flash with `idf.py`
+instead of `pio run`. See BUILD_IDF.md for the full migration plan and
+per-file status.
+
+----------------------------------------------------------------------
+1. Install ESP-IDF v6.0.1
+----------------------------------------------------------------------
+   Follow the Espressif "get-started" guide for your OS:
+   https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32/get-started/
+
+   Quick version (Windows PowerShell):
+       git clone -b v6.0.1 --recursive https://github.com/espressif/esp-idf.git
+       cd esp-idf
+       .\install.ps1 esp32
+       # in every new shell:
+       . $HOME\esp\esp-idf\export.ps1
+
+----------------------------------------------------------------------
+2. Vendored third-party sources (one-time)
+----------------------------------------------------------------------
+   The build expects these under `components/`:
+
+       components/mongoose/            (already vendored)
+       components/emodbus/src/         eModbus 1.7.2 (clone required)
+       components/micro_ocpp/src/      MicroOcpp (clone required)
+       components/micro_ocpp_mongoose/src/
+                                      MicroOcppMongooseClient (clone required)
+
+   Clone them like so (from the project root):
+
+       git clone --depth 1 --branch 1.7.2 https://github.com/miq19/eModbus.git /tmp/emodbus
+       Copy-Item -Recurse /tmp/emodbus/src components/emodbus/src
+
+       git clone https://github.com/matth-x/MicroOcpp.git /tmp/mocpp
+       Copy-Item -Recurse /tmp/mocpp/src components/micro_ocpp/src
+
+       git clone https://github.com/matth-x/MicroOcppMongoose.git /tmp/mocpp_mg
+       Copy-Item -Recurse /tmp/mocpp_mg/src components/micro_ocpp_mongoose/src
+
+----------------------------------------------------------------------
+3. Build, flash, and monitor
+----------------------------------------------------------------------
+   cd SmartEVSE-3
+   idf.py set-target esp32
+   idf.py build
+   idf.py -p COM3 flash monitor
+
+   The build emits build/SmartEVSE_v3.bin ready to flash.
+
+----------------------------------------------------------------------
+4. OTA over the web UI (no driver required)
+----------------------------------------------------------------------
+   -surf to http://your-smartevse/update
+   -select the firmware.bin from this archive, OR if you want the debug
+    version (via telnet over your wifi), select firmware.debug.bin;
+    select the "signed" versions if you want to be sure you are flashing
+    an original factory or dingo35 version
+   -if you get FAIL, check your wifi connection and try again;
+   -after OK, wait 10-30 seconds and your new firmware including the
+    webserver should be online!

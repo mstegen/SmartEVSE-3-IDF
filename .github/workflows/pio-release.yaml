@@ -1,0 +1,78 @@
+on:
+  push:
+    tags:
+      - 'v*'
+
+name: Create Release
+jobs:
+  version: 
+    runs-on: ubuntu-latest
+    steps:
+      - id: get_version
+        uses: battila7/get-version-action@v2
+    outputs:
+      major: ${{ steps.get_version.outputs.major }}
+      minor: ${{ steps.get_version.outputs.minor }}
+      patch: ${{ steps.get_version.outputs.patch }}
+      prerelease: ${{ steps.get_version.outputs.prerelease }}
+  
+  build:
+    needs: version
+    uses: ./.github/workflows/pio-build.yaml
+    with:
+      major: ${{ needs.version.outputs.major }}
+      minor: ${{ needs.version.outputs.minor }}
+      patch: ${{ needs.version.outputs.patch }}
+      prerelease: ${{ needs.version.outputs.prerelease }}
+    secrets: inherit
+  
+  release:
+    permissions: write-all
+    needs: build
+    name: Upload Release Asset
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get current tag
+        id: tag
+        run: echo "tag=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
+      
+      - uses: actions/checkout@v4
+      
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        id: download
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: dist
+      
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Zip artifacts
+        run: zip -j ${{ steps.tag.outputs.tag }}-dist.zip ./dist/*
+      
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: ${{ steps.tag.outputs.tag }}-dist.zip
+          tag_name: ${{ github.ref_name }}
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-2
+      
+      - name: Upload files to S3
+        run: |
+          aws s3 cp ./dist/firmware.debug.signed.bin s3://smartevse-3/${{ github.repository_owner }}_firmware.debug.signed.bin
+          aws s3 cp ./dist/firmware.signed.bin s3://smartevse-3/${{ github.repository_owner }}_firmware.signed.bin

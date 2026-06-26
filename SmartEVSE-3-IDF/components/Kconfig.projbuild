@@ -1,0 +1,48 @@
+# =============================================================================
+# SmartEVSE-3 (v3) project-level Kconfig
+# Mirrors the platformio.ini build_flags and the SMARTEVSE_VERSION / MODEM /
+# ENABLE_OCPP defines that used to live in [common] and [env:release].
+# =============================================================================
+
+menu "SmartEVSE v3 Firmware"
+
+    config SMARTEVSE_VERSION
+        int "SmartEVSE firmware version"
+        range 30 39
+        default 30
+        help
+            Target hardware variant. 30 = v3 (ESP32 + on-board CH32-free design).
+            v4 (40) and the CH32V203 build are out of scope for this migration.
+
+    config SMARTEVSE_OCPP
+        bool "Enable OCPP (MicroOcpp)"
+        default y
+        help
+            Compile in MicroOcpp + MicroOcppMongoose. The original platformio.ini
+            had `-DENABLE_OCPP=1` in [common.build_flags]; matching that here.
+
+    config SMARTEVSE_MODEM
+        bool "Enable Quectel LTE modem (v4 only)"
+        default n
+        help
+            Out of scope for v3. Left here for forward compatibility.
+
+    config SMARTEVSE_FAKE_RFID
+        bool "Emulate RFID via /debug?showrfid=1"
+        default n
+        help
+            Mirrors FAKE_RFID=0 in main.h.
+
+    config SMARTEVSE_FAKE_SUNNY_DAY
+        bool "Emulate solar injection"
+        default n
+        help
+            Mirrors FAKE_SUNNY_DAY=0 in main.h.
+
+    config SMARTEVSE_AUTOMATED_TESTING
+        bool "Allow REST API to override hardware parameters"
+        default n
+        help
+            Mirrors AUTOMATED_TESTING=0 in main.h.
+
+endmenu
