@@ -22,7 +22,6 @@
  */
 
 #ifndef __EVSE_ESP32
-
 #define __EVSE_ESP32
 
 
@@ -30,6 +29,7 @@
 #include "main.h"
 #include "glcd.h"
 #include "meter.h"
+#include "driver/mcpwm_prelude.h"
 
 // Pin definitions left side ESP32
 #define PIN_TEMP 36
@@ -59,7 +59,6 @@
 #define PIN_LEDR 2
 #define PIN_CPOFF 15
 
-#if SMARTEVSE_VERSION >=30 && SMARTEVSE_VERSION < 40
 #define PIN_LCD_A0_B2 25
 #define PIN_LCD_RST 5
 #define SPI_MOSI 33                                                             // SPI connections to LCD
@@ -79,15 +78,7 @@
 #define MCPWM_PERIOD_TICKS  10000u
 #define MCPWM_SAMPLE_HIGH     500u   //  5% — normal CP high-region sample
 #define MCPWM_SAMPLE_LOW     9600u   // 96% — diode-check low-region sample
-#ifdef SMARTEVSE_VERSION
-#include "driver/mcpwm_prelude.h"
 extern mcpwm_cmpr_handle_t s_cmpr_duty;   // duty-cycle comparator, set by SetCPDuty()
-#endif
-#else
-#define PIN_LCD_A0_B2 40
-#define PIN_LCD_RST 42
-#include "funconfig.h"
-#endif //SMARTEVSE_VERSION
 
 //extra pin definitions for v3.1
 #define PIN_RCM_FAULT_V31 38
@@ -253,7 +244,7 @@ void setMode(uint8_t NewMode) ;
 void BuzzConfirmation(void);
 void BuzzError(void);
 
-#if ENABLE_OCPP && defined(SMARTEVSE_VERSION) //run OCPP only on ESP32
+#if ENABLE_OCPP
 #include <MicroOcpp.h>  // for MicroOcpp::TxNotification
 void ocppUpdateRfidReading(const unsigned char *uuid, size_t uuidLen);
 bool ocppIsConnectorPlugged();
@@ -263,48 +254,5 @@ MicroOcpp::TxNotification ocppGetTxNotification();
 
 bool ocppLockingTxDefined();
 #endif //ENABLE_OCPP
-
-#if SMARTEVSE_VERSION >= 40
-// Pin definitions
-#define PIN_QCA700X_INT 9           // SPI connections to QCA7000X
-#define PIN_QCA700X_CS 11           // on ESP-S3 with OCTAL flash/PSRAM, GPIO pins 33-37 can not be used!
-#define SPI_MOSI 13
-#define SPI_MISO 12
-#define SPI_SCK 10
-#define PIN_QCA700X_RESETN 45
-
-#define USART_TX 43                 // comm bus to mainboard
-#define USART_RX 44
-
-#define BUTTON1 0                   // Navigation buttons
-//#define BUTTON2 1                   // renamed from prototype!
-#define BUTTON3 2
-
-// New top board
-#define WCH_NRST 8                  // microcontroller program interface
-#define WCH_SWDIO 17                // unconnected!!! pin on 16pin connector is used for LCD power
-#define WCH_SWCLK 18
-
-// Old prototype top board
-//#define WCH_NRST 18                  // microcontroller program interface
-//#define WCH_SWDIO 8
-//#define WCH_SWCLK 17
-
-#define LCD_SDA 38                  // LCD interface
-#define LCD_SCK 39
-#define LCD_LED 41
-#define LCD_CS 1
-
-#define LCD_CHANNEL 5               // PWM channel
-
-// ESP-WCH Communication States
-#define COMM_VER_REQ 1              // Version Reqest           ESP -> WCH
-#define COMM_VER_RSP 2              // Version Response         ESP <- WCH
-#define COMM_CONFIG_SET 3           // Configuration Set        ESP -> WCH
-#define COMM_CONFIG_CNF 4           // Configuration confirm.   ESP <- WCH
-#define COMM_STATUS_REQ 5           // Status Request
-#define COMM_STATUS_RSP 6           // Status Response
-
-#endif //SMARTEVSE_VERSION
 
 #endif

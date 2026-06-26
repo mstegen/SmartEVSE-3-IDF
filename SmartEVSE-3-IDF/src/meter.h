@@ -27,10 +27,6 @@
 #define __EVSE_METER
 
 #include "main.h"
-#ifndef SMARTEVSE_VERSION //CH32
-#include "ch32.h"
-#endif
-
 
 #define EM_SENSORBOX 1                                                          // Mains meter types
 #define EM_PHOENIX_CONTACT 2
@@ -84,14 +80,12 @@ class Meter {
     uint8_t Type;                                                               // previously: MainsMeter; Type of Mains electric meter (0: Disabled / Constants EM_*)
     uint8_t Address;
     char DeviceHostName[32];                                                    // Selected hostname for networked meters
-        uint8_t HostMenuSelection;                                                  // Pending host menu selection for this meter
+    uint8_t HostMenuSelection;                                                  // Pending host menu selection for this meter
     int16_t Irms[3];                                                            // Momentary current per Phase (23 = 2.3A) (resolution 100mA)
     int16_t Imeasured;                                                          // Max of all Phases (Amps *10) of mains power
     int16_t Power[3];
     int16_t PowerMeasured;                                                      // Measured Charge power in Watt by kWh meter (sum of all phases)
-#if !defined(SMARTEVSE_VERSION) || SMARTEVSE_VERSION >=30 && SMARTEVSE_VERSION < 40 //not on ESP32 v4
     uint8_t Timeout;
-#endif
     int32_t Import_active_energy;                                               // Imported active energy
     int32_t Export_active_energy;                                               // Exported active energy
     int32_t Energy;                                                             // Wh -> Import_active_energy - Export_active_energy

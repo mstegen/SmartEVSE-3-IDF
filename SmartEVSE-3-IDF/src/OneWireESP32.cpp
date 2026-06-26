@@ -7,7 +7,6 @@
  * timing, and the open-drain pin mode internally -- eliminating all the manual
  * RMT channel management that was the source of previous issues.
  */
-#ifdef SMARTEVSE_VERSION //ESP32
 
 #include "OneWireESP32.h"
 
@@ -111,5 +110,3 @@ addresses[found++] = dev.address;
 onewire_del_device_iter(iter);
 return found;
 }
-
-#endif /* SMARTEVSE_VERSION */

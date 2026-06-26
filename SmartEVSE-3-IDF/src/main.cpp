@@ -24,11 +24,6 @@
 #include "esp32.h"
 #include <ArduinoJson.h>
 
-
-
-
-
-
 #include "network_common.h"
 #include "esp_ota_ops.h"
 /* Note: mbedtls/md_internal.h was removed in mbedTLS 4.0. PSA crypto

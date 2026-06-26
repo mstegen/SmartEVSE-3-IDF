@@ -1,6 +1,3 @@
-#if defined(ESP32)
-
-
 #include <vector>
 
 #include "mbedtls/base64.h"
@@ -55,7 +52,7 @@
 #include "esp32.h"
 #endif
 
-#if SMARTEVSE_VERSION >=30
+#if SMARTEVSE_VERSION
 #include "OneWire.h"
 #endif
 
@@ -2005,7 +2002,7 @@ static void fn_http_server(struct mg_connection *c, int ev, void *ev_data) {
                         FREE(signature);
                     }
                 } else //end of firmware.signed.bin
-#if SMARTEVSE_VERSION >=30
+#if SMARTEVSE_VERSION
                 if (!memcmp(file,"rfid.txt", sizeof("rfid.txt"))) {
                     if (offset != 0) {
                         mg_http_reply(c, 400, "", "rfid.txt too big, only 100 rfid's allowed!");
@@ -2048,8 +2045,6 @@ static void fn_http_server(struct mg_connection *c, int ev, void *ev_data) {
                     }
                 } else //end of rfid.txt
                     mg_http_reply(c, 400, "", "only allowed to flash firmware.bin, firmware.debug.bin, firmware.signed.bin, firmware.debug.signed.bin or rfid.txt");
-#else
-                    mg_http_reply(c, 400, "", "only allowed to flash firmware.bin, firmware.debug.bin, firmware.signed.bin, firmware.debug.signed.bin");
 #endif
                 mg_http_reply(c, 200, "", "%ld", res);
             }
@@ -2181,9 +2176,7 @@ void timeSyncCallback(struct timeval *tv)
 
 // Returns true if any network interface (WiFi or Ethernet) has an IP address
 bool NetworkConnected(void) {
-#if SMARTEVSE_VERSION >= 30 && SMARTEVSE_VERSION < 40
     if (EthHasIP) return true;
-#endif
     if (!WiFi.isConnected()) return false;
     return WiFi.localIP() != IPAddress((uint32_t)0);
 }
@@ -2317,7 +2310,7 @@ static void idf_wifi_event_handler(void *arg, esp_event_base_t event_base,
 
 
 void handleWIFImode() {
-#if SMARTEVSE_VERSION >= 30 && SMARTEVSE_VERSION < 40
+#if SMARTEVSE_VERSION
     // Ethernet takes priority: when cable is connected, disable WiFi
     if (EthConnected) {
         if (WiFi.getMode() != WIFI_OFF) {
@@ -2583,4 +2576,4 @@ void network_loop() {
     Debug.handle();
 #endif
 }
-#endif
+

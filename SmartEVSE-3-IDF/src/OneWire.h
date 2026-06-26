@@ -25,7 +25,7 @@
 
 #ifndef __ONEWIRE_H
 #define __ONEWIRE_H
-#ifdef SMARTEVSE_VERSION //ESP32
+
 
 extern Preferences preferences;
 
@@ -33,15 +33,4 @@ void ReadRFIDlist(void);
 void DeleteAllRFID(void);
 void CheckRFID(void);
 void LoadandStoreRFID(unsigned int *RFIDparam);
-#else
-/*
- * OneWire.h
- *
- *  Created on: 16 Feb 2024
- *      Author: Mike
- */
-
-uint8_t OneWireReadCardId(void);
-
-#endif
 #endif // #ifndef __ONEWIRE_H

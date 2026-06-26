@@ -69,7 +69,6 @@
 
 #include "debug.h"
 #include "stdint.h"
-#include "main_c.h"
 
 #if ENABLE_OCPP //TODO perhaps move to esp32.h
 #include <MicroOcpp/Model/ConnectorBase/Notification.h>
@@ -163,13 +162,6 @@
 #define PILOT_NOK   0
 #define PILOT_SHORT 255
 
-#ifndef SMARTEVSE_VERSION
-#define _RSTB_0 digitalWrite(PIN_LCD_RST, LOW);
-#define _RSTB_1 digitalWrite(PIN_LCD_RST, HIGH);
-#define _A0_0 digitalWrite(PIN_LCD_A0_B2, LOW);
-#define _A0_1 digitalWrite(PIN_LCD_A0_B2, HIGH);
-#endif
-
 #define STATE_A_LED_BRIGHTNESS 40
 #define STATE_B_LED_BRIGHTNESS 255
 #define ERROR_LED_BRIGHTNESS 255
@@ -177,13 +169,50 @@
 #define LCD_BRIGHTNESS 255
 
 
+#define NUM_ADC_SAMPLES 32
+
+#define STATE_A 0                                                               // A Vehicle not connected
+#define STATE_B 1                                                               // B Vehicle connected / not ready to accept energy
+#define STATE_C 2                                                               // C Vehicle connected / ready to accept energy / ventilation not required
+#define STATE_D 3                                                               // D Vehicle connected / ready to accept energy / ventilation required (not implemented)
+#define STATE_COMM_B 4                                                          // State change request A->B (set by node)
+#define STATE_COMM_B_OK 5                                                       // State change A->B OK (set by master)
+#define STATE_COMM_C 6                                                          // State change request B->C (set by node)
+#define STATE_COMM_C_OK 7                                                       // State change B->C OK (set by master)
+#define STATE_ACTSTART 8                                                        // Activation mode in progress
+#define STATE_B1 9                                                              // Vehicle connected / EVSE not ready to deliver energy: no PWM signal
+#define STATE_C1 10                                                             // Vehicle charging / EVSE not ready to deliver energy: no PWM signal (temp state when stopping charge from EVSE)
+#define STATE_MODEM_REQUEST 11                                                  // Vehicle connected / requesting ISO15118 communication, 0% duty
+#define STATE_MODEM_WAIT 12                                                     // Vehicle connected / requesting ISO15118 communication, 5% duty
+#define STATE_MODEM_DONE 13                                                     // Modem communication succesful, SoCs extracted. Here, re-plug vehicle
+#define STATE_MODEM_DENIED 14                                                   // Modem access denied based on EVCCID, re-plug vehicle and try again
+
+#define NOSTATE 255
+
+#define PWM_5 50                                                                // 5% of PWM
+#define PWM_95 950                                                              // 95% of PWM
+#define PWM_96 960                                                              // PWM 96%
+#define PWM_100 1000                                                            // 100% of PWM
+
+
+#define NO_ERROR 0
+#define LESS_6A 1
+#define CT_NOCOMM 2
+#define TEMP_HIGH 4
+#define EV_NOCOMM 8
+#define RCM_TRIPPED 16                                                          // RCM tripped. >6mA DC residual current detected.
+#define RCM_TEST 32                                                             // RCM_TEST = true, RCM_TRIPPED = false:  RCM test is running (if counter is active) OR RCM test has failed (if RCMTestcounter is not active)
+                                                                                // RCM_TEST = true, RCM_TRIPPED = true:   RCM test has succeeded
+                                                                                // RCM_TEST = false, RCM_TRIPPED = true:  RCM is tripped
+                                                                                // RCM_TEST = false, RCM_TRIPPED = false: no RCM problems
+#define CIRCUIT_NOCOMM 64
+
+
+
 //TODO replace the macros by function calls
 void setPilot(bool On);
 #define PILOT_CONNECTED setPilot(true);
 #define PILOT_DISCONNECTED setPilot(false);
-
-//TODO this can be integrated by choosing same definitions
-#ifdef SMARTEVSE_VERSION //ESP32
 
 #define BACKLIGHT_ON digitalWrite(PIN_LCD_LED, HIGH);
 #define BACKLIGHT_OFF digitalWrite(PIN_LCD_LED, LOW);
@@ -193,10 +222,6 @@ void setPilot(bool On);
 #define ACTUATOR_OFF { digitalWrite(PIN_ACTB, HIGH); digitalWrite(PIN_ACTA, HIGH); }
 
 #define RCMFAULT digitalRead(PIN_RCM_FAULT) //TODO ok for v4?
-#if SMARTEVSE_VERSION >=40
-#define SEND_TO_CH32(X) Serial1.printf("@%s:%u\n", #X, X); _LOG_V("[->] %s:%u\n", #X, X);
-#define SEND_TO_ESP32(X) //dummy
-#else //v3
 #define SEND_TO_CH32(X) //dummy
 #define SEND_TO_ESP32(X) //dummy
 #define CONTACTOR1_ON _LOG_A("Switching Contactor1 ON.\n"); digitalWrite(PIN_SSR, HIGH);
@@ -204,21 +229,6 @@ void setPilot(bool On);
 
 #define CONTACTOR2_ON _LOG_A("Switching Contactor2 ON.\n"); digitalWrite(PIN_SSR2, HIGH);
 #define CONTACTOR2_OFF _LOG_A("Switching Contactor2 OFF.\n"); digitalWrite(PIN_SSR2, LOW);
-#endif
-#else //CH32
-#define SEND_TO_CH32(X) //dummy
-#define SEND_TO_ESP32(X) printf("@%s:%u\n", #X, X);
-
-#define CONTACTOR1_ON printf("@MSG: Switching Contactor1 ON.\n"); funDigitalWrite(SSR1, FUN_HIGH);
-#define CONTACTOR1_OFF printf("@MSG: Switching Contactor1 OFF.\n"); funDigitalWrite(SSR1, FUN_LOW);
-
-#define CONTACTOR2_ON printf("@MSG: Switching Contactor2 ON.\n"); funDigitalWrite(SSR2, FUN_HIGH);
-#define CONTACTOR2_OFF printf("@MSG: Switching Contactor2 OFF.\n"); funDigitalWrite(SSR2, FUN_LOW);
-
-#define ACTUATOR_LOCK { funDigitalWrite(ACTB, FUN_HIGH); funDigitalWrite(ACTA, FUN_LOW); }
-#define ACTUATOR_UNLOCK { funDigitalWrite(ACTB, FUN_LOW); funDigitalWrite(ACTA, FUN_HIGH); }
-#define ACTUATOR_OFF { funDigitalWrite(ACTB, FUN_HIGH); funDigitalWrite(ACTA, FUN_HIGH); }
-#endif
 
 #define MODBUS_INVALID 0
 #define MODBUS_OK 1
@@ -383,4 +393,18 @@ struct Node_t {
 };
 
 extern bool BuzzerPresent;
+
+extern uint8_t ErrorFlags;
+extern void clearErrorFlags(uint8_t flags);
+
+extern uint8_t LoadBl;
+extern void SetCurrent(uint16_t current);
+
+extern uint8_t ModbusRx[256];
+extern void SetCPDuty(uint32_t DutyCycle);
+
+extern volatile uint8_t RxRdy1;
+extern volatile uint8_t ModbusRxLen;
+
+
 #endif
