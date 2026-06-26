@@ -1,4 +1,27 @@
-.pio
-.vscode
 packed_fs.c
-cmake-build-*/
+
+# === ESP-IDF generated files (never commit these) ===
+build/
+build_*/
+sdkconfig
+sdkconfig.old
+sdkconfig.ci
+sdkconfig.defaults.old
+
+# === IDE / Editor ===
+.vscode/
+.idea/
+*.swp
+*~
+
+# === Python ===
+__pycache__/
+*.py[cod]
+
+# === OS generated ===
+.DS_Store
+Thumbs.db
+
+# === Managed components (if you use them) ===
+managed_components/
+dependencies.lock

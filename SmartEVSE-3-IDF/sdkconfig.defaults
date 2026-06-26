@@ -1,0 +1,301 @@
+# =============================================================================
+# SmartEVSE-3 (v3) — native ESP-IDF v6.0.1 sdkconfig defaults
+#
+# This file replaces the equivalent options that were in platformio.ini:
+#   [env:release] + [common] sections
+# Build with:  idf.py set-target esp32 && idf.py build
+# =============================================================================
+
+# ---- Target & toolchain ------------------------------------------------------
+CONFIG_IDF_TARGET="esp32"
+# Set ESP CPU frequency to 240Mhz
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160 is not set
+
+# ---- Flash layout (board_build.f_flash, board_build.flash_mode, partitions) --
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_custom.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+
+# ---- FreeRTOS ----------------------------------------------------------------
+CONFIG_FREERTOS_HZ=1000
+
+# ---- Main task stack size ----------------------------------------------------
+# Arduino framework used 8192 bytes for loopTask (the loop() equivalent).
+# The IDF main task default (3584) is far too small for OCPP + mongoose + JSON.
+# mbedTLS TLS handshake (WSS) alone uses 8-12 KB of stack, so 16384 is needed.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=3584
+CONFIG_MAIN_TASK_STACK_SIZE=3584
+
+# ---- Optimisation & assertions (matches -DNDEBUG) -----------------------------
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE=y
+
+# ---- Logging -----------------------------------------------------------------
+# Two log systems are in play, gated independently:
+#   1. App logs    -> -DDBG=0 -DLOG_LEVEL=0 -DMG_ENABLE_LOG=0 -DCORE_DEBUG_LEVEL=0
+#                     set in components/app/CMakeLists.txt, and toggled by the
+#                     SMARTEVSE_DISABLE_DEBUG_OUTPUT kconfig symbol below.
+#   2. IDF logs    -> CONFIG_LOG_* below (ESP_LOGE/W/I/D/V from IDF, drivers,
+#                     mDNS, Wi-Fi, lwIP, mbedTLS, ...).
+#
+# This file ships with logging SILENCED (production default). To re-enable
+# development logs, either:
+#   (a) Flip CONFIG_SMARTEVSE_DISABLE_DEBUG_OUTPUT=n and re-comment the
+#       CONFIG_LOG_DEFAULT_LEVEL_INFO=y / CONFIG_LOG_MAXIMUM_LEVEL=3 block
+#       below. Or
+#   (b) `idf.py menuconfig`, go to "SmartEVSE-3", toggle "Silence all debug
+#       / log output" off, and set "Maximum log verbosity" / "Default log
+#       verbosity" to INFO under "ESP Log configuration".
+#
+# With SMARTEVSE_DISABLE_DEBUG_OUTPUT=y the app and Mongoose logs are out,
+# and the IDF CONFIG_LOG_DEFAULT_LEVEL / CONFIG_LOG_MAXIMUM_LEVEL below
+# are forced to NONE / ERROR.
+#
+# CONFIG_LOG_DEFAULT_LEVEL_NONE=y
+# CONFIG_LOG_DEFAULT_LEVEL_ERROR is not set
+# CONFIG_LOG_DEFAULT_LEVEL_WARN is not set
+# CONFIG_LOG_DEFAULT_LEVEL_INFO is not set
+# CONFIG_LOG_DEFAULT_LEVEL_DEBUG is not set
+# CONFIG_LOG_DEFAULT_LEVEL_VERBOSE is not set
+# CONFIG_LOG_MAXIMUM_LEVEL_ERROR=y
+# CONFIG_LOG_MAXIMUM_LEVEL_WARN is not set
+# CONFIG_LOG_MAXIMUM_LEVEL_INFO is not set
+# CONFIG_LOG_MAXIMUM_LEVEL_DEBUG is not set
+# CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE is not set
+# CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
+# CONFIG_LOG_DEFAULT_LEVEL=0
+# CONFIG_LOG_MAXIMUM_LEVEL=0
+# CONFIG_LOG_COLORS=y                          # off when silenced
+CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y
+
+# To re-enable IDF logs at INFO level, comment out the four lines above and
+# uncomment the following block:
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL=3
+CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
+CONFIG_LOG_MAXIMUM_LEVEL=3
+CONFIG_LOG_COLORS=y
+
+CONFIG_MBEDTLS_SSL_PROTO_TLS1_2=y
+CONFIG_MBEDTLS_TLS_SERVER=y
+CONFIG_MBEDTLS_TLS_CLIENT=y
+
+# ---- LWIP / TCP/IP defaults needed by Mongoose + MQTT -----------------------
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_LWIP_SO_REUSE=y
+CONFIG_LWIP_SO_RCVBUF=y
+
+# ---- Wi-Fi -------------------------------------------------------------------
+CONFIG_ESP32_WIFI_ENABLED=y
+CONFIG_ESP32_WIFI_STATIC_TX_BUFFER=y
+CONFIG_ESP32_WIFI_DYNAMIC_TX_BUFFER=y
+CONFIG_ESP32_WIFI_AMPDU_TX_ENABLED=y
+CONFIG_ESP32_WIFI_AMPDU_RX_ENABLED=y
+
+# ---- mDNS (espressif/mdns managed component) ---------------------------------
+CONFIG_MDNS_MAX_SERVICES=10
+
+# ---- SNTP sync every 3 hours -------------------------------------------------
+CONFIG_LWIP_SNTP_UPDATE_DELAY=10800000
+
+# ---- Filesystem: keep SPIFFS labelled "spiffs" for backward compatibility ---
+# (MicroOcpp is configured with MO_PARTITION_LABEL='"spiffs"')
+
+# ---- Watchdog: avoid accidental triggers in long MQTT/OCPP operations --------
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+
+# ---- App version (matches -DSMARTEVSE_VERSION=30) ----------------------------
+# Surfaced via app descriptor
+CONFIG_APP_PROJECT_VER="3.0.0"
+
+# ============================================================================
+# mbedTLS — trim unused features
+# ----------------------------------------------------------------------------
+# The OTA signature path in network_common.cpp uses only:
+#   - psa_hash_*  (SHA-256)  via components/mbedtls/tf-psa-crypto
+#   - mbedtls_pk_parse_public_key  (PEM, RSA-2048)
+#   - mbedtls_pk_verify  (PKCS#1 v1.5)
+#   - mbedtls_x509_crt_parse  (for the MQTT CA cert)
+#   - mbedtls_ssl_*  (TLS client, used by esp-mqtt / WSS for OCPP)
+# Everything else is fair game.
+# ============================================================================
+
+# ---- mbedTLS buffer sizing (heap budget for TLS) -----------------------------
+# Three modes available in mbedTLS 4.x:
+#
+# 1) Static, equal in/out:
+#      CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=n
+#      mbedTLS_SSL_IN_CONTENT_LEN and _OUT_CONTENT_LEN share one parent
+#      (MBEDTLS_SSL_MAX_CONTENT_LEN), default 16 KB. ~16 KB per connection.
+#
+# 2) Static, asymmetric in/out (recommended for embedded with WSS+MQTT):
+#      CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+#      MBEDTLS_SSL_IN_CONTENT_LEN=8192   (8 KB  — server→client records)
+#      MBEDTLS_SSL_OUT_CONTENT_LEN=4096  (4 KB  — client→server records)
+#      ~12 KB per connection.
+#
+# 3) Dynamic (alloc on demand, free after use):
+#      CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+#      CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192  (cap)
+#      CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096 (cap)
+#      Saves a lot of heap if most connections are idle; pays a small
+#      per-message alloc/free cost. Note: needs !MBEDTLS_SSL_PROTO_DTLS,
+#      incompatible with MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH.
+#
+# 4) Variable (resize buffer to negotiated max fragment length):
+#      CONFIG_MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH=y
+#      Incompatible with MBEDTLS_DYNAMIC_BUFFER.
+#
+# 8 KB in / 4 KB out, asymmetric. Same as the old custom mbedtls build.
+# The mbedTLS 4.x defaults are 16 KB / 4 KB symmetric-on-content-len 
+# i.e. 16 KB in per connection, which is twice the heap budget we're 
+# willing to spend on a single TLS session.
+CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+# If you want the dynamic / variable modes instead, uncomment one
+# of the lines below. The mbedtls 4.x dynamic-buffer code is stable
+# (the v3.x port's irc-experiment issues were caused by the older
+# 2.x implementation, not by the option itself).
+# CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+# CONFIG_MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH=y
+
+# ---- mbedTLS core: error strings + self-test + version banners --------------
+# Mongoose 7.20's mg_tls_err() (src/mongoose.c) calls mbedtls_strerror()
+# unconditionally. To save the verbose error-string table we
+# disable MBEDTLS_ERROR_STRINGS, and to keep the linker happy we enable
+# MBEDTLS_ERROR_STRERROR_DUMMY — a tiny built-in stub that satisfies
+# the symbol without bringing in the high/low-level decoder strings.
+CONFIG_MBEDTLS_ERROR_STRINGS=n
+CONFIG_MBEDTLS_ERROR_STRERROR_DUMMY=y
+# Mongoose 7.20 doesn't enable MBEDTLS_DEBUG (no mbedtls_debug_set_threshold
+# call), so we can disable it. This drops the mbedtls_debug_* print
+# functions and the per-module debug-msg tables.
+CONFIG_MBEDTLS_DEBUG=n
+# CONFIG_MBEDTLS_SELF_TEST is the internal "do all algorithms round-trip"
+# test suite, called from mbedtls_self_test(). Not used at runtime.
+CONFIG_MBEDTLS_SELF_TEST=n
+# CONFIG_MBEDTLS_VERSION_C adds MBEDTLS_VERSION_STRING read by version.c;
+# we never read it.
+CONFIG_MBEDTLS_VERSION_C=n
+# CONFIG_MBEDTLS_VERSION_FEATURES is a meta header, no runtime cost.
+# CONFIG_MBEDTLS_HAVE_TIME_DATE embeds gettimeofday() for cert validity
+# checks; we already disable HAVE_TIME_DATE — keep HAVE_TIME for the
+# TLS stack's monotonic clock fallback.
+# CONFIG_MBEDTLS_HAVE_TIME=y  (default — keep on)
+
+# ---- mbedTLS protocols: client only, TLS 1.2 only ---------------------------
+# We are a TLS *client* (MQTT, WSS-OCPP). We never run a TLS server. We
+# don't use DTLS, renegotiation, session tickets, or TLS 1.0/1.1.
+# Note: kconfig defaults to MBEDTLS_TLS_SERVER_AND_CLIENT (the choice
+# default). Setting MBEDTLS_TLS_SERVER=n doesn't override the choice
+# default on `idf.py reconfigure` because kconfig treats the choice
+# as a single unit — see the rest of this section.
+# CONFIG_MBEDTLS_TLS_SERVER=y  (default — combined)
+# CONFIG_MBEDTLS_TLS_CLIENT=y  (default — keep on)
+# CONFIG_MBEDTLS_SSL_PROTO_TLS1_2=y  (default — keep on)
+# Note: TLS 1.0 and 1.1 were removed in mbedTLS 4.x (used by IDF v6).
+# Only TLS 1.2 (PROTO_TLS1_2) and TLS 1.3 (PROTO_TLS1_3, off here) are
+# available.
+CONFIG_MBEDTLS_SSL_PROTO_DTLS=n
+CONFIG_MBEDTLS_SSL_RENEGOTIATION=n
+CONFIG_MBEDTLS_CLIENT_SSL_SESSION_TICKETS=n
+CONFIG_MBEDTLS_SERVER_SSL_SESSION_TICKETS=n
+# Maximum fragment length extension is server-side; not negotiated by us.
+CONFIG_MBEDTLS_SSL_MAX_FRAGMENT_LENGTH=n
+# SSL session cache is server-only.
+CONFIG_MBEDTLS_SSL_CACHE_C=n
+# Verbose alert logging (kept on for TLS handshake debug visibility).
+CONFIG_MBEDTLS_SSL_ALL_ALERT_MESSAGES=y
+
+# ---- mbedTLS ciphers: drop unused modes ------------------------------------
+# AES-128/256 (CFB/OFB/XTS) are server-side ciphersuites; we use CBC + GCM.
+CONFIG_MBEDTLS_CIPHER_MODE_CFB=n
+CONFIG_MBEDTLS_CIPHER_MODE_OFB=n
+CONFIG_MBEDTLS_CIPHER_MODE_XTS=n
+# Legacy / regional ciphers we never negotiate.
+CONFIG_MBEDTLS_CAMELLIA_C=n
+CONFIG_MBEDTLS_DES_C=n
+CONFIG_MBEDTLS_ARIA_C=n
+CONFIG_MBEDTLS_CHACHA20_C=n
+# (CHACHA20 enables CHACHAPOLY_C; both off)
+CONFIG_MBEDTLS_NIST_KW_C=n
+# MD5 / SHA-1 are used for TLS 1.0/1.1 handshake signatures. TLS 1.2
+# uses SHA-256 by default. We disable both, but keep SHA-256/384/512.
+# (MBEDTLS_MD5_C / MBEDTLS_SHA1_C remain required by X.509 for legacy
+# signature algs in CA chains; the IDF Kconfig doesn't let us disable
+# them when MBEDTLS_TLS_ENABLED, so leave defaults.)
+
+# ---- mbedTLS X.509: drop CRL/CSR/extended ops -------------------------------
+# We only *parse* X.509 certs (CA root) and verify RSA signatures.
+# We never parse CRLs, CSRs, or extended EC keys.
+CONFIG_MBEDTLS_X509_CRL_PARSE_C=n
+CONFIG_MBEDTLS_X509_CSR_PARSE_C=n
+CONFIG_MBEDTLS_PK_PARSE_EC_EXTENDED=n
+CONFIG_MBEDTLS_PK_PARSE_EC_COMPRESSED=n
+# PKCS#7 / PKCS#5 are not used (no S/MIME, no PBKDF2).
+CONFIG_MBEDTLS_PKCS7_C=n
+CONFIG_MBEDTLS_PKCS5_C=n
+# ECDSA deterministic (RFC 6979) — not used; we use plain ECDSA for TLS.
+CONFIG_MBEDTLS_ECDSA_DETERMINISTIC=n
+# ECP restartable (saves RAM but slower) — leave off.
+# CONFIG_MBEDTLS_ECP_RESTARTABLE=n  (default)
+
+# ---- mbedTLS certificate bundle: disabled ----------------------------------
+# This project does NOT call esp_crt_bundle_attach() anywhere. TLS uses
+# per-connection CA only:
+#   - MQTT: PEM at /mqtt_ca.pem loaded via readMqttCaCert() and passed to
+#     esp-mqtt's mqtt_ssl_set() at MQTT connect time
+#   - OCPP: MicroOcpp constructs MOcppMongooseClient with an explicit CA
+#     (also pulled from LittleFS) for WSS
+# Removing the default Mozilla bundle frees ~78 KB of x509a heap
+# (200-cer slot, full chain) and a few KB of code. Matches the v3.5
+# Arduino reference's per-connection PEM behaviour.
+# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE is not set
+# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL is not set
+# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN is not set
+# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_NONE is not set
+
+# ---- mbedTLS ECP curves: keep only the ones a typical MQTT/OCPP CA uses ---
+# Standard CA roots use secp256r1 (P-256). Some use secp384r1 (P-384).
+# secp521r1, secp256k1, brainpool*, curve25519 are not used by commercial CAs.
+CONFIG_MBEDTLS_ECP_DP_SECP521R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_SECP256K1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_BP256R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_BP384R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_BP512R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_CURVE25519_ENABLED=n
+# secp256r1 (P-256) and secp384r1 (P-384) stay on — they're what
+# commercial CAs sign with.
+
+# ---- Hardware acceleration: keep all (it's free) ----------------------------
+# CONFIG_MBEDTLS_HARDWARE_SHA, _MPI, _AES, _GCM_SUPPORT_NON_AES_CIPHER
+# delegate to the ESP32 crypto accelerator. No cost to keep them on.
+
+# ============================================================================
+# Other libraries that can be trimmed
+# ============================================================================
+
+# ---- WiFi — drop the WPA3 / enterprise / SAE bits we never use -----------
+# Personal-only home WiFi networks; skip WPA3-Enterprise and SAE.
+# (CONFIG_ESP32_WIFI_ENABLED=y is required for any WiFi to work.)
+# These are stable defaults, just listed here as "could be turned off" if
+# we ever move to a model that doesn't need them. Disabled individually
+# to keep WiFi association working on the test networks.
+
+# ---- Bootloader log: already NONE ------------------------------------------
+# (CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y is set in the top section)
+
+# ---- Component manager warnings --------------------------------------------
+# No `idf.py reconfigure` should be needed for these — they're all
+# CONFIG_* values which the kconfig tool merges into sdkconfig on the
+# next `idf.py build` (or `idf.py reconfigure`).
+
+
