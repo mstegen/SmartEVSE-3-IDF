@@ -3148,7 +3148,7 @@ void ocppLoop() {
  * RED_CHANNEL=2 (used by the RGB LED via the arduino_compat shim).
  * The shim's ledcAttachPin() reconfigures the channel with timer_sel =
  * channel/2, so sharing channel 2 between the buzzer and the Red LED
- * would cause every ledcWrite(RED_CHANNEL) in BlinkLed_singlerun() to
+ * would cause every ledcWrite(RED_CHANNEL) in BlinkLed_tick() to
  * also drive the buzzer's GPIO. The v3.5 Arduino reference uses
  * channel 6 for the same reason. */
 #define BUZZER_LEDC_CHANNEL  LEDC_CHANNEL_6

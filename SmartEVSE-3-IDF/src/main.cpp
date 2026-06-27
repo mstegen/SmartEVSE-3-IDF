@@ -12,8 +12,6 @@
 #include "memory.h"  //for memcpy
 #include <time.h>
 
-#define EXT extern
-#define _GLCD GLCD()
 #include "esp32.h"
 #include <ArduinoJson.h>
 
@@ -209,17 +207,17 @@ extern unsigned long OcppLastTxNotification;
 extern MicroOcpp::TxNotification OcppTrackTxNotification;
 #endif //ENABLE_OCPP
 
-EXT uint32_t elapsedmax, elapsedtime;
+extern uint32_t elapsedmax, elapsedtime;
 
 //functions
-EXT void setup();
-EXT void setState(uint8_t NewState);
-EXT void setErrorFlags(uint8_t flags);
-EXT int8_t TemperatureSensor();
+extern void setup();
+extern void setState(uint8_t NewState);
+extern void setErrorFlags(uint8_t flags);
+extern int8_t TemperatureSensor();
 uint8_t OneWireReadCardId();
-EXT uint8_t ProximityPin();
-EXT void PowerPanicCtrl(uint8_t enable);
-EXT uint8_t ReadESPdata(char *buf);
+extern uint8_t ProximityPin();
+extern void PowerPanicCtrl(uint8_t enable);
+extern uint8_t ReadESPdata(char *buf);
 
 extern void requestEnergyMeasurement(uint8_t Meter, uint8_t Address, bool Export);
 extern void requestNodeConfig(uint8_t NodeNr);
@@ -1246,7 +1244,8 @@ void CalcBalancedCurrent(char mod) {
 } //CalcBalancedCurrent
 
 
-void Timer1S_singlerun(void) {
+// Timer1S tick body. Runs in Timer1S task context.
+static void Timer1S_tick(void) {
     static uint8_t Broadcast = 4;
 
     if (BacklightTimer) BacklightTimer--;                               // Decrease backlight counter every second.
@@ -1263,7 +1262,7 @@ void Timer1S_singlerun(void) {
         if (ToModemWaitStateTimer) ToModemWaitStateTimer--;
         else {
             setState(STATE_MODEM_WAIT);                                         // switch to state Modem 2
-            _GLCD;
+            GLCD();
         }
     }
 
@@ -1273,7 +1272,7 @@ void Timer1S_singlerun(void) {
         }
         else{
             setState(STATE_MODEM_DONE); 
-            _GLCD;
+            GLCD();
         }
     }
 
@@ -1296,7 +1295,7 @@ void Timer1S_singlerun(void) {
                 ModemStage = 1;
 
                 setState(STATE_B);                                     // switch to STATE_B
-                _GLCD;                                                // Re-init LCD (200ms delay)
+                GLCD();                                                // Re-init LCD (200ms delay)
             } else {
                 // We actually do not want to continue charging and re-start at modem request after 60s
                 ModemStage = 0;
@@ -1304,7 +1303,7 @@ void Timer1S_singlerun(void) {
 
                 // Change to MODEM_DENIED state
                 setState(STATE_MODEM_DENIED);
-                _GLCD;                                                // Re-init LCD (200ms delay)
+                GLCD();                                                // Re-init LCD (200ms delay)
             }
         }
     }
@@ -1315,7 +1314,7 @@ void Timer1S_singlerun(void) {
             LeaveModemDeniedStateTimer = -1;           // reset ModemStateDeniedTimer
             setState(STATE_A);                         // switch to STATE_A
             PILOT_CONNECTED;
-            _GLCD;                                     // Re-init LCD (200ms delay)
+            GLCD();                                     // Re-init LCD (200ms delay)
         }
     }
 #endif
@@ -1516,7 +1515,7 @@ void Timer1S_singlerun(void) {
     }
 #endif
 
-} //Timer1S_singlerun
+} //Timer1S_tick
 
 
 
@@ -1979,11 +1978,9 @@ bool ReadPowerMeasured(char *SerialBuf) {
 #endif
 
 
-// Task that handles the Cable Lock and modbus
-// 
-// called every 100ms
-//
-void Timer100ms_singlerun(void) {
+// Timer100ms tick body. Runs in Timer100ms task context.
+// Handles the Cable Lock and Modbus
+static void Timer100ms_tick(void) {
 static unsigned int locktimer = 0, unlocktimer = 0;
 
     // Check if the cable lock is used
@@ -2270,8 +2267,8 @@ void ModbusRequestLoop() {
 //  Red (flash)    = Error / Fault / Unavailable
 // Otherwise uses per-Mode colors (Normal=green, Smart=green, Solar=orange)
 //
-// Task is called every 10ms
-void BlinkLed_singlerun(void) {
+// BlinkLed tick body. Runs in Timer10ms task context.
+static void BlinkLed_tick(void) {
 static uint8_t RedPwm = 0, GreenPwm = 0, BluePwm = 0;
 static uint8_t LedCount = 0;                                                   // Raw Counter before being converted to PWM value
 static unsigned int LedPwm = 0;                                                // PWM value 0-255
@@ -2579,10 +2576,11 @@ void Handle_ESP32_Message(char *SerialBuf, uint8_t *CommState) {
 
 
 
-void Timer10ms_singlerun(void) {
+// Timer10ms tick body. Runs in Timer10ms task context.
+static void Timer10ms_tick(void) {
     static uint8_t DiodeCheck = 0;
     static uint16_t StateTimer = 0;                                                 // When switching from State B to C, make sure pilot is at 6v for 100ms
-    BlinkLed_singlerun();
+    BlinkLed_tick();
 
     static uint8_t LcdPwm = 0;
 
@@ -2624,7 +2622,7 @@ void Timer10ms_singlerun(void) {
 
     if (timeinfo.tm_sec != old_sec) {
         old_sec = timeinfo.tm_sec;
-        _GLCD;
+        GLCD();
     }
 
 
@@ -2722,7 +2720,7 @@ void Timer10ms_singlerun(void) {
                         CalcBalancedCurrent(1);                             // Calculate charge current for all connected EVSE's
                         DiodeCheck = 0;                                     // (local variable)
                         setState(STATE_C);                                  // switch to STATE_C
-                        if (!LCDNav) _GLCD;                                // Don't update the LCD if we are navigating the menu
+                        if (!LCDNav) GLCD();                                // Don't update the LCD if we are navigating the menu
 
                     } else setErrorFlags(LESS_6A);                          // Not enough power available
                 }
@@ -2772,7 +2770,7 @@ void Timer10ms_singlerun(void) {
         DiodeCheck = 0;
         setState(STATE_C);                                                  // switch to STATE_C
                                                                             // Don't update the LCD if we are navigating the menu
-        if (!LCDNav) _GLCD;                                                // immediately update LCD
+        if (!LCDNav) GLCD();                                                // immediately update LCD
     }
 
     // ############### EVSE State C #################
@@ -2858,31 +2856,31 @@ void Timer10ms_singlerun(void) {
 
 }
 
+// FreeRTOS task: drift-free 10ms periodic
 void Timer10ms(void * parameter) {
-    // infinite loop
+    TickType_t last = xTaskGetTickCount();
     while(1) {
-        Timer10ms_singlerun();
-        // Pause the task for 10ms
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-    } // while(1) loop
+        Timer10ms_tick();
+        vTaskDelayUntil(&last, 10 / portTICK_PERIOD_MS);
+    }
 }
 
+// FreeRTOS task: drift-free 100ms periodic
 void Timer100ms(void * parameter) {
-    // infinite loop
+    TickType_t last = xTaskGetTickCount();
     while(1) {
-        Timer100ms_singlerun();
-        // Pause the task for 100ms
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-    } // while(1) loop
+        Timer100ms_tick();
+        vTaskDelayUntil(&last, 100 / portTICK_PERIOD_MS);
+    }
 }
 
+// FreeRTOS task: drift-free 1000ms periodic
 void Timer1S(void * parameter) {
-    // infinite loop
+    TickType_t last = xTaskGetTickCount();
     while(1) {
-        Timer1S_singlerun();
-        // Pause the task for 1000ms
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-    } // while(1) loop
+        Timer1S_tick();
+        vTaskDelayUntil(&last, 1000 / portTICK_PERIOD_MS);
+    }
 }
 
 /**
