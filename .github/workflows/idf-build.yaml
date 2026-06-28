@@ -1,0 +1,160 @@
+name: ESP-IDF Build
+
+# Replaces the old `PlatformIO CI` workflow (pio-build.yaml) after the
+# project migrated from Arduino/PlatformIO to native ESP-IDF v6.0.1.
+#
+# The ESP-IDF project lives at `SmartEVSE-3-IDF/SmartEVSE-3-IDF/`
+# (the outer `SmartEVSE-3-IDF/` folder has no CMakeLists.txt — it's a
+# GitHub-repo layout artifact, not a build directory). The `app`
+# component pulls in `src/`, and the in-tree `components/` directory
+# (set via EXTRA_COMPONENT_DIRS in CMakeLists.txt) supplies the
+# vendored mongoose / eModbus / MicroOcpp / onewire_bus code, so no
+# extra cloning step is required on the runner.
+
+on:
+  workflow_call:
+    inputs:
+      major:
+        required: true
+        type: string
+      minor:
+        required: true
+        type: string
+      patch:
+        required: true
+        type: string
+      prerelease:
+        required: false
+        type: string
+        default: ""
+    outputs:
+      artifact:
+        description: "Name of the uploaded distribution artifact"
+        value: ${{ jobs.build.outputs.artifact }}
+  push:
+    branches:
+      - master
+      - release/*
+  pull_request:
+    branches:
+      - master
+      - release/*
+
+# Cancel any in-flight run for the same ref so we don't waste runner time.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.idf_target }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't fail the whole matrix if a future target breaks; surface it.
+      fail-fast: false
+      matrix:
+        include:
+          - idf_target: esp32
+            artifact_name: dists_esp32
+    outputs:
+      artifact: ${{ matrix.artifact_name }}
+    env:
+      SECRET_RSA_KEY: ${{ secrets.SECRET_RSA_KEY }}
+
+    steps:
+      - name: Get current branch
+        id: branch
+        run: echo "branch=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
+
+      - name: Get current datetime
+        id: datetime
+        run: echo "datetime=$(date -u +'%Y%m%dT%H%M%SZ')" >> $GITHUB_OUTPUT
+
+      - name: Get current time
+        id: time
+        run: echo "time=$(date -u +'%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          if [ -z "${{ inputs.major }}" ]; then
+            echo "version=${{ steps.time.outputs.time }}" >> $GITHUB_OUTPUT
+          else
+            if [ -z "${{ inputs.prerelease }}" ]; then
+              echo "version=${{ inputs.major }}.${{ inputs.minor }}.${{ inputs.patch }}" >> $GITHUB_OUTPUT
+            else
+              echo "version=${{ inputs.major }}.${{ inputs.minor }}.${{ inputs.patch }}-${{ inputs.prerelease }}" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # ESP-IDF itself doesn't need submodules from *this* repo
+          # (it has none), but esp-idf-ci-action clones IDF with
+          # `--recursive` internally, so this is just defensive.
+          submodules: recursive
+
+      # NOTE: espressif/esp-idf-ci-action only ships tags up to v1.2.0
+      # (no v2 exists). The action is a thin wrapper around the
+      # official `espressif/idf` Docker image, so any IDF version that
+      # has a Docker tag works — including v6.0.1, published on Docker
+      # Hub. The action runs `command` inside the container with
+      # working directory `/app/<repo>/<path>` (path is appended, not
+      # absolute). The repo is already named `SmartEVSE-3-IDF`, so we
+      # leave `path` empty (= repo root, which becomes
+      # `/app/mstegen/SmartEVSE-3-IDF`) and `cd` into the nested
+      # project directory inside `command`.
+      - name: Build and stage distribution
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.1
+          target: ${{ matrix.idf_target }}
+          command: |
+            set -euo pipefail
+            cd SmartEVSE-3-IDF
+
+            # set-target is idempotent and writes sdkconfig on a fresh
+            # checkout, so we always run it to honour the matrix.
+            idf.py set-target ${{ matrix.idf_target }}
+            idf.py build
+            test -f build/SmartEVSE_v3.bin || { echo "ERROR: build/SmartEVSE_v3.bin not produced"; exit 1; }
+
+            # Stage the artifacts under the repo checkout. The container
+            # mounts $GITHUB_WORKSPACE at /app/<repo>, so anything we
+            # write under there survives after the container exits and
+            # is visible to subsequent host-side steps.
+            mkdir -p distribution
+            cp -f build/SmartEVSE_v3.bin distribution/firmware.bin
+            cp -f HowToFlash.txt distribution/HowToFlash.txt
+            echo "Staged:" ; ls -la distribution/
+
+      - name: Sign firmware (when SECRET_RSA_KEY is set)
+        if: ${{ env.SECRET_RSA_KEY != '' }}
+        working-directory: SmartEVSE-3-IDF
+        env:
+          super_secret: ${{ env.SECRET_RSA_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # RSA-SHA256 signature concatenated in front of the bin so a
+          # single upload is enough via the /update endpoint. The
+          # secret file is written via mktemp to keep it out of the
+          # process listing (`ps aux`).
+          secret_file=$(mktemp)
+          echo "$super_secret" > "$secret_file"
+          openssl dgst -sign "$secret_file" -keyform PEM -sha256 \
+            -out firmware.sign -binary distribution/firmware.bin
+          cat firmware.sign distribution/firmware.bin > distribution/firmware.signed.bin
+          rm -f "$secret_file" firmware.sign
+          echo "Signed firmware staged:" ; ls -la distribution/
+
+      - name: Upload distribution artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: SmartEVSE-3-IDF/distribution/*
+          retention-days: 14
+          compression-level: 6
+          if-no-files-found: error
