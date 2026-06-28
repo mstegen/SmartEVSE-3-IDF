@@ -1181,7 +1181,7 @@ String GetIntervalString(void) {
 
     CapacityNode* n = first_interval;
     while (n) {
-        JsonObject obj = arr.createNestedObject();
+        JsonObject obj = arr.add<JsonObject>();
         obj["start"] = n->start_minutes;
         obj["power"] = n->max_power_watts;
         n = n->next;
@@ -1518,7 +1518,6 @@ void write_settings(void) {
     }
 
     ConfigChanged = 1;                                                          // FIXME this variable never reset to 0?
-    SEND_TO_CH32(ConfigChanged);
 
     // Update timestamp after successful write
     LastSettingsWriteTime = millis();
@@ -1623,7 +1622,6 @@ void RecomputeSoC(void) {
 void DisconnectEvent(void){
     _LOG_A("EV disconnected for a while. Resetting SoC states");
     uint8_t ModemStage = 0; // Enable Modem states again
-    SEND_TO_CH32(ModemStage)
     InitialSoC = -1;
     FullSoC = -1;
     RemainingSoC = -1;
@@ -2594,15 +2592,12 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
     } else if (mg_http_match_uri(hm, "/automated_testing") && !memcmp("POST", hm->method.buf, hm->method.len)) {
         if(request->hasParam("current_max")) {
             MaxCurrent = strtol(request->getParam("current_max")->value().c_str(),NULL,0);
-            SEND_TO_CH32(MaxCurrent)
         }
         if(request->hasParam("current_main")) {
             MaxMains = strtol(request->getParam("current_main")->value().c_str(),NULL,0);
-            SEND_TO_CH32(MaxMains)
         }
         if(request->hasParam("current_max_circuit")) {
             MaxCircuit = strtol(request->getParam("current_max_circuit")->value().c_str(),NULL,0);
-            SEND_TO_CH32(MaxCircuit)
         }
         if(request->hasParam("mainsmeter")) {
             MainsMeter.Type = strtol(request->getParam("mainsmeter")->value().c_str(),NULL,0);
@@ -2614,14 +2609,12 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
         }
         if(request->hasParam("config")) {
             Config = strtol(request->getParam("config")->value().c_str(),NULL,0);
-            SEND_TO_CH32(Config)
             setState(STATE_A);                                                  // so the new value will actually be read
         }
         if(request->hasParam("loadbl")) {
             int LBL = strtol(request->getParam("loadbl")->value().c_str(),NULL,0);
             ConfigureModbusMode(LBL);
             LoadBl = LBL;
-            SEND_TO_CH32(LoadBl)
         }
         mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s\r\n", ""); //json request needs json response
         return true;
@@ -3155,7 +3148,7 @@ void ocppLoop() {
  * RED_CHANNEL=2 (used by the RGB LED via the arduino_compat shim).
  * The shim's ledcAttachPin() reconfigures the channel with timer_sel =
  * channel/2, so sharing channel 2 between the buzzer and the Red LED
- * would cause every ledcWrite(RED_CHANNEL) in BlinkLed_singlerun() to
+ * would cause every ledcWrite(RED_CHANNEL) in BlinkLed_tick() to
  * also drive the buzzer's GPIO. The v3.5 Arduino reference uses
  * channel 6 for the same reason. */
 #define BUZZER_LEDC_CHANNEL  LEDC_CHANNEL_6
@@ -3193,7 +3186,6 @@ static void buzzer_init(uint8_t gpio_num) {
     ch_cfg.gpio_num   = (int)gpio_num;
     ch_cfg.speed_mode = LEDC_LOW_SPEED_MODE;
     ch_cfg.channel    = BUZZER_LEDC_CHANNEL;
-    ch_cfg.intr_type  = LEDC_INTR_DISABLE;
     ch_cfg.timer_sel  = BUZZER_LEDC_TIMER;
     ch_cfg.duty       = 0;
     ch_cfg.hpoint     = 0;
