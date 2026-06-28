@@ -62,69 +62,6 @@ int digitalRead(uint8_t pin) {
     return gpio_get_level((gpio_num_t)pin) ? HIGH : LOW;
 }
 
-int analogRead(uint8_t pin) {
-    /* SmartEVSE-3 v3 doesn't use analogRead directly — the ESP32 ADC is
-     * driven by sensor-specific code in src/ that uses native IDF APIs
-     * (esp_adc/adc_oneshot.h in v6). This stub exists only for source
-     * compatibility; return 0 so any stray calls don't break the build. */
-    (void)pin;
-    return 0;
-}
-
-/* ---- GPIO interrupt shim (attachInterrupt) ------------------------------ *
- * The v3 source calls `attachInterrupt(pin, isr, mode)` to install a
- * CP-pulse detector. v6 IDF replaces the legacy `gpio_isr_register`
- * helper with the GPIO ISR service; the shim installs the service
- * lazily and routes the per-pin ISR through `gpio_isr_handler_add`.
- *
- * Note: a global table is used because the v3 source installs only a
- * handful of interrupts and never detaches them.
- */
-#define ARDUINO_ISR_MAX 8
-static struct {
-    uint8_t         pin;
-    arduino_isr_t   fn;
-} s_isr_table[ARDUINO_ISR_MAX];
-static int s_isr_count = 0;
-static bool s_isr_service_installed = false;
-
-static void IRAM_ATTR arduino_isr_dispatch(void *arg) {
-    uint32_t mask = (uint32_t)(uintptr_t)arg;
-    for (int i = 0; i < s_isr_count; ++i) {
-        uint32_t pin_mask = (1ULL << s_isr_table[i].pin);
-        if (mask & pin_mask) {
-            arduino_isr_t fn = s_isr_table[i].fn;
-            if (fn) fn();
-        }
-    }
-}
-
-void attachInterrupt(uint8_t pin, arduino_isr_t isr, int mode) {
-    if (!s_isr_service_installed) {
-        esp_err_t err = gpio_install_isr_service(0);
-        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-            ESP_LOGE(TAG, "gpio_install_isr_service failed: %d", (int)err);
-            return;
-        }
-        s_isr_service_installed = true;
-    }
-    if (s_isr_count >= ARDUINO_ISR_MAX) {
-        ESP_LOGE(TAG, "attachInterrupt: ISR table full");
-        return;
-    }
-    gpio_int_type_t intr_type = GPIO_INTR_DISABLE;
-    if (mode == RISING)  intr_type = GPIO_INTR_POSEDGE;
-    if (mode == FALLING) intr_type = GPIO_INTR_NEGEDGE;
-    if (mode == CHANGE)  intr_type = GPIO_INTR_ANYEDGE;
-    gpio_set_intr_type((gpio_num_t)pin, intr_type);
-    s_isr_table[s_isr_count].pin = pin;
-    s_isr_table[s_isr_count].fn  = isr;
-    uint32_t pin_mask = (1ULL << pin);
-    gpio_isr_handler_add((gpio_num_t)pin, arduino_isr_dispatch, (void *)(uintptr_t)pin_mask);
-    gpio_intr_enable((gpio_num_t)pin);
-    s_isr_count++;
-}
-
 /* ---- SerialCompat (UART wrapper) ------------------------------------------ *
  * SmartEVSE-3 uses Serial1 (RS485) and (in v4) Serial2 (CH32 link). The
  * Arduino API exposed: begin(baud, config), printf(), available(), read(),
@@ -166,17 +103,6 @@ int Serial_read(SerialHandle *h) {
 int Serial_peek(SerialHandle *h) {
     /* uart driver has no peek; approximate with a non-blocking read. */
     return Serial_read(h);
-}
-
-int Serial_readBytesUntil(SerialHandle *h, char term, char *buf, int len) {
-    int i = 0;
-    while (i < len) {
-        int c = Serial_read(h);
-        if (c < 0) { vTaskDelay(1); continue; }
-        if (c == term) return i;
-        buf[i++] = (char)c;
-    }
-    return i;
 }
 
 void Serial_flush(SerialHandle *h) {
@@ -327,140 +253,9 @@ void nvs_init_once(void) {
     done = true;
 }
 
-
-/* Global Arduino-style Preferences object. */
-// (removed duplicate declaration)
-
-
-
 /* Global Arduino-style Preferences object. The v3 source references
  * this as `preferences` (an Arduino-style global). */
 Preferences preferences;
-
-
-
-/* ---- Arduino timer API (legacy hw_timer_t) ------------------------------
- * v3 firmware uses `hw_timer_t *timerA = timerBegin(0, 80, true);`
- * and friends. The legacy ESP-IDF v4 API was removed in v5. We
- * wrap the new gptimer driver behind a `hw_timer_t*` pointer so
- * the v3 source compiles unchanged. */
-/* Note: gptimer.h lives under components/esp_driver_gptimer in IDF
- * v6. We don't need to include it because the shim is purely a
- * parameter-store stub; the timer ISR is not actually wired up. */
-
-hw_timer_t *timerBegin(uint8_t timer, uint16_t prescaler, bool countUp) {
-    hw_timer_t *t = new hw_timer_t{};
-    if (!t) return nullptr;
-    t->group = timer;
-    t->prescaler = prescaler;
-    t->auto_reload = false;
-    t->alarm_value = 0;
-    t->callback = nullptr;
-    t->user_data = nullptr;
-    return t;
-}
-
-void timerEnd(hw_timer_t *t) {
-    if (!t) return;
-    delete t;
-}
-
-void timerAttachInterrupt(hw_timer_t *t, hw_timer_callback_t cb, bool edge) {
-    if (!t) return;
-    t->callback = cb;
-    (void)edge;
-}
-
-void timerDetachInterrupt(hw_timer_t *t) {
-    if (!t) return;
-    t->callback = nullptr;
-}
-
-void timerAlarmWrite(hw_timer_t *t, uint64_t value, bool autoreload) {
-    if (!t) return;
-    t->alarm_value = value;
-    t->auto_reload = autoreload;
-}
-
-void timerAlarmEnable(hw_timer_t *t) {
-    if (!t) return;
-    /* The v3 firmware installs only one timer. For full gptimer
-     * support, replace this with a per-timer gptimer_handle_t. */
-    ESP_LOGW(TAG, "timerAlarmEnable: legacy timer API shim, no gptimer backing yet");
-}
-
-void timerAlarmDisable(hw_timer_t *t) {
-    if (!t) return;
-}
-
-void timerWrite(hw_timer_t *t, uint64_t value) {
-    if (!t) return;
-    t->alarm_value = value;
-}
-
-void timerStart(hw_timer_t *t)  { (void)t; }
-void timerStop(hw_timer_t *t)   { (void)t; }
-
-/* ---- LEDC PWM API (Arduino style) -------------------------------------- */
-#include "driver/ledc.h"
-
-double ledcSetup(uint8_t channel, uint32_t freq, uint8_t resolution_bits) {
-    /* Map the Arduino "channel" 0..7 to a v6 LEDC timer/channel pair.
-     * v3 source uses channels 0..7 with a single timer (timer 0) per
-     * frequency change. Use a 1:1 mapping: each Arduino channel = one
-     * LEDC timer. Resolution is rounded up to a supported v6 value.
-     *
-     * NOTE: we only configure the TIMER here. The CHANNEL is configured
-     * by ledcAttachPin() once the GPIO is known. Configuring the channel
-     * here with gpio_num=-1 (no pin yet) used to "work" in older IDF
-     * versions but IDF v6 rejects it with "gpio_num argument is invalid",
-     * producing 4 error lines at boot for the LCD / RGB LED channels. */
-    ledc_timer_t timer = (ledc_timer_t)((channel) / 2);  /* 2 channels per timer */
-    uint8_t res = resolution_bits ? resolution_bits : 8;
-    if (res < 8) res = 8;
-    if (res > 13) res = 13;
-    ledc_timer_config_t tcfg = {
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .duty_resolution = (ledc_timer_bit_t)res,
-        .timer_num = timer,
-        .freq_hz = freq,
-        .clk_cfg = LEDC_AUTO_CLK,
-        .deconfigure = false,
-    };
-    esp_err_t err = ledc_timer_config(&tcfg);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ledc_timer_config failed: %d", (int)err);
-        return 0.0;
-    }
-    return (double)freq;
-}
-
-void ledcAttachPin(uint8_t pin, uint8_t channel) {
-    /* Reconfigure the channel to route to the requested GPIO. */
-    ledc_channel_config_t ccfg = {
-        .gpio_num = (int)pin,
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .channel = (ledc_channel_t)channel,
-        .intr_type = LEDC_INTR_DISABLE,
-        .timer_sel = (ledc_timer_t)((channel) / 2),
-        .duty = 0,
-        .hpoint = 0,
-        .flags = { .output_invert = 0 },
-    };
-    esp_err_t err = ledc_channel_config(&ccfg);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ledcAttachPin: channel_config failed: %d", (int)err);
-    }
-}
-
-void ledcWrite(uint8_t channel, uint32_t duty) {
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)channel, duty);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)channel);
-}
-
-void ledcDetachPin(uint8_t pin) {
-    ledc_stop(LEDC_LOW_SPEED_MODE, (ledc_channel_t)0, (uint32_t)pin);
-}
 
 /* ---- ESPClass shim ----------------------------------------------------- *
  * The heap/alloc methods live in update_compat.cpp; we just include

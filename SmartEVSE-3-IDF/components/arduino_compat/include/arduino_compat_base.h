@@ -131,14 +131,6 @@ extern _SerialStubPrint Serial;
 void pinMode     (uint8_t pin, uint8_t mode);
 void digitalWrite(uint8_t pin, uint8_t val);
 int  digitalRead (uint8_t pin);
-int  analogRead  (uint8_t pin);
-
-/* Arduino-style ISR attach: a thin wrapper over gpio_isr_handler_add.
- * The v3 source uses attachInterrupt(pin, isr, mode) for the CP pulse
- * detector. The shim installs a GPIO ISR service if not already done
- * and routes the matching pin to the user function. */
-typedef void (*arduino_isr_t)(void);
-void attachInterrupt(uint8_t pin, arduino_isr_t isr, int mode);
 
 /* UART config bits used by the v3 source: 8N1 = 8 data bits, no
  * parity, 1 stop bit. */
@@ -146,19 +138,6 @@ void attachInterrupt(uint8_t pin, arduino_isr_t isr, int mode);
 #define SERIAL_8E1  0x800003C
 #define SERIAL_8O1  0x800005C
 #define SERIAL_8N2  0x800001E
-
-/* ---- LEDC PWM (Arduino style) ------------------------------------------- *
- * The Arduino API exposes ledcSetup(channel, freq, res_bits) and
- * ledcAttachPin(pin, channel) and ledcWrite(channel, duty). The v6
- * LEDC driver splits timer and channel configuration, so the shim
- * presents the legacy single-call API and creates the underlying
- * timer/channel pair on demand.
- */
-double ledcSetup(uint8_t channel, uint32_t freq, uint8_t resolution_bits);
-void    ledcAttachPin(uint8_t pin, uint8_t channel);
-void    ledcWrite(uint8_t channel, uint32_t duty);
-void    ledcWriteTone(uint8_t channel, uint32_t freq);
-void    ledcDetachPin(uint8_t pin);
 
 /* ---- Serial (HardwareSerial-style) --------------------------------------- */
 typedef struct {
@@ -173,7 +152,6 @@ void Serial_begin           (SerialHandle *h, uint32_t baud);
 int  Serial_available       (SerialHandle *h);
 int  Serial_read            (SerialHandle *h);
 int  Serial_peek            (SerialHandle *h);
-int  Serial_readBytesUntil  (SerialHandle *h, char term, char *buf, int len);
 void Serial_flush           (SerialHandle *h);
 void Serial_print           (SerialHandle *h, const char *s);
 void Serial_println         (SerialHandle *h, const char *s);
@@ -371,55 +349,6 @@ public:
 
 /* Single global Preferences object, matching the Arduino convention. */
 extern Preferences preferences;
-
-/* ---- Arduino timer / LEDC shims ---------------------------------------- */
-/* The v3 source uses the Arduino `hw_timer_t` API:
- *   hw_timer_t *timerA = NULL;
- *   timerA = timerBegin(0, 80, true);
- *   timerAttachInterrupt(timerA, &onTimerA, true);
- *   timerAlarmWrite(timerA, 1000, true);
- *   timerAlarmEnable(timerA);
- *   timerWrite(timerA, 0);
- *   timerDetachInterrupt(timerA);
- *   timerEnd(timerA);
- *
- * In ESP-IDF v6 the timer API is the GPTimer subsystem
- * (`gptimer_handle_t`, `gptimer_new_timer`, etc.). The shim wraps
- * GPTimer behind the old hw_timer_t pointer so the v3 source
- * compiles unchanged. ISR dispatch is approximated using a
- * single shared gptimer alarm; the v3 source only ever installs
- * one timer, so this is sufficient.
- *
- * Similarly, the v3 source uses `ledcWrite(channel, duty)` and
- * `ledcWriteTone(channel, freq)` for PWM (LCD backlight, buzzer).
- * These map 1:1 onto the v6 LEDC driver; we forward directly. */
-typedef void (*hw_timer_callback_t)(void);
-
-typedef struct hw_timer_s {
-    int                group;       /* legacy "timer number" */
-    int                prescaler;   /* legacy prescaler */
-    bool               auto_reload;
-    uint64_t           alarm_value;
-    hw_timer_callback_t callback;
-    void              *user_data;
-} hw_timer_t;
-
-hw_timer_t *timerBegin   (uint8_t timer, uint16_t prescaler, bool countUp);
-void        timerEnd     (hw_timer_t *t);
-void        timerAttachInterrupt(hw_timer_t *t, hw_timer_callback_t cb, bool edge);
-void        timerDetachInterrupt(hw_timer_t *t);
-void        timerAlarmWrite(hw_timer_t *t, uint64_t value, bool autoreload);
-void        timerAlarmEnable(hw_timer_t *t);
-void        timerAlarmDisable(hw_timer_t *t);
-void        timerWrite   (hw_timer_t *t, uint64_t value);
-void        timerStart   (hw_timer_t *t);
-void        timerStop    (hw_timer_t *t);
-
-/* LEDC PWM API (Arduino style). The v3 source uses
- * `ledcWrite(channel, duty)`. The buzzer uses direct IDF LEDC API
- * (buzzer_init/buzzer_set_freq/buzzer_off in esp32.cpp). */
-void ledcWrite     (uint8_t channel, uint32_t duty);
-void ledcDetachPin (uint8_t pin);    /* nothing to do on IDF — included for compat */
 
 /* Note: the existing ESPClass (in update_compat.h) is extended with
  * getFreeHeap / getHeapSize / getMinFreeHeap / getMaxAllocHeap
