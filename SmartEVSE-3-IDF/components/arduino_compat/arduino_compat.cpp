@@ -32,39 +32,11 @@
 #include <sys/time.h>
 #include "driver/gpio.h"        // v6: provided by esp_driver_gpio
 #include "driver/uart.h"         // v6: provided by esp_driver_uart
-#include "esp_timer.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
 
 static const char *TAG = "arduino_compat";
-
-/* ---- Time helpers --------------------------------------------------------- */
-uint32_t millis(void) { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
-uint32_t micros(void) { return (uint32_t)(esp_timer_get_time()); }
-
-void delay(uint32_t ms) {
-    vTaskDelay(pdMS_TO_TICKS(ms));
-}
-void delayMicroseconds(uint32_t us) {
-    // esp_timer supports microsecond resolution
-    uint64_t start = esp_timer_get_time();
-    uint64_t target = start + us;
-    while (esp_timer_get_time() < target) {
-        // busy wait; the FreeRTOS scheduler may preempt us
-    }
-}
-
-/* ---- Random --------------------------------------------------------------- */
-extern "C" uint32_t esp_random(void); /* from esp_random.h */
-long random(long max) {
-    if (max <= 0) return 0;
-    return (long)(esp_random() % (uint32_t)max);
-}
-long random(long min, long max) {
-    if (max <= min) return min;
-    return min + (long)(esp_random() % (uint32_t)(max - min));
-}
 
 /* ---- GPIO helpers --------------------------------------------------------- */
 void pinMode(uint8_t pin, uint8_t mode) {

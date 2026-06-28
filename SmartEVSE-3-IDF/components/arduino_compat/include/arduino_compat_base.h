@@ -22,16 +22,21 @@
 #include "freertos/task.h"
 #include "nvs.h"              /* for nvs_handle_t in Preferences */
 #include "driver/gpio.h"      /* for gpio_num_t in pinMode/digitalWrite */
+#include "esp_timer.h"        /* for esp_timer_get_time() */
+#include "esp_random.h"       /* for esp_random() */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* ---- Time ----------------------------------------------------------------- */
-uint32_t millis(void);
-uint32_t micros(void);
-void     delay(uint32_t ms);
-void     delayMicroseconds(uint32_t us);
+static inline uint32_t millis(void)            { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
+static inline uint32_t micros(void)            { return (uint32_t)(esp_timer_get_time()); }
+static inline void     delay(uint32_t ms)      { vTaskDelay(pdMS_TO_TICKS(ms)); }
+static inline void     delayMicroseconds(uint32_t us) {
+    uint64_t end = esp_timer_get_time() + us;
+    while (esp_timer_get_time() < end) {}
+}
 
 /* ---- Stub Serial (UART0 debug sink) ------------------------------------- *
  * The v3 source uses `Serial` for diagnostic output (e.g.
@@ -425,12 +430,16 @@ void ledcDetachPin (uint8_t pin);    /* nothing to do on IDF — included for co
 #ifdef __cplusplus
 /* ---- Random (C++ only) --------------------------------------------------- */
 /* Arduino's `random()` accepts (max) or (min, max) and returns a long.
- * We route this through esp_random() which gives uniform 32-bit random
- * numbers, then scale into the requested range.
- * Declared here (not in the extern "C" block above) so it does not
+ * Inlined here (not in the extern "C" block above) so it does not
  * conflict with the C standard library's `random(3)`. */
-long  random(long max);
-long  random(long min, long max);
+static inline long random(long max) {
+    if (max <= 0) return 0;
+    return (long)(esp_random() % (uint32_t)max);
+}
+static inline long random(long min, long max) {
+    if (max <= min) return min;
+    return min + (long)(esp_random() % (uint32_t)(max - min));
+}
 #endif
 
 #endif /* ARDUINO_COMPAT_BASE_H */
