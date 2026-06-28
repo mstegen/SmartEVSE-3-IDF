@@ -13,6 +13,7 @@
 #include <time.h>
 
 #include "esp32.h"
+#include "driver/ledc.h"
 #include <ArduinoJson.h>
 
 #include "network_common.h"
@@ -2409,9 +2410,10 @@ static unsigned int LedPwm = 0;                                                /
 
     }
 
-    ledcWrite(RED_CHANNEL, RedPwm);
-    ledcWrite(GREEN_CHANNEL, GreenPwm);
-    ledcWrite(BLUE_CHANNEL, BluePwm);
+    // Update the dutycycle values, and write to the LED PWM channels
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)RED_CHANNEL, RedPwm); ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)RED_CHANNEL);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)GREEN_CHANNEL, GreenPwm); ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)GREEN_CHANNEL);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)BLUE_CHANNEL, BluePwm); ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)BLUE_CHANNEL);
 
 }
 

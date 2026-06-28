@@ -453,7 +453,8 @@ void setLCDbacklight(uint8_t pwm) {
     if (EthPresent) {
         etherlcd_set_backlight(pwm);
     } else {
-        ledcWrite(LCD_CHANNEL, pwm);
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)LCD_CHANNEL, pwm);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)LCD_CHANNEL);
     }
 }
 
@@ -3407,26 +3408,34 @@ extern "C" void setup() {
         // ADC init is complete (see above); callbacks are safe to fire.
     }
 
-    // RGB LED and LCD channels use LEDC.
-    ledcSetup(RED_CHANNEL, 5000, 8);            // R channel 2, 5kHz, 8 bit
-    ledcSetup(GREEN_CHANNEL, 5000, 8);          // G channel 3, 5kHz, 8 bit
-    ledcSetup(BLUE_CHANNEL, 5000, 8);           // B channel 4, 5kHz, 8 bit
-    if (!EthPresent) {
-        ledcSetup(LCD_CHANNEL, 5000, 8);        // LCD channel 5, 5kHz, 8 bit
-    }  // When EthPresent, backlight PWM is handled by CH32V003
-
-    // attach the channels to the GPIO to be controlled
-    // CP pin is driven by MCPWM (see above); only LED/LCD pins use LEDC here.
-    ledcAttachPin(PIN_LEDR, RED_CHANNEL);
-    ledcAttachPin(PIN_LEDG, GREEN_CHANNEL);
-    ledcAttachPin(PIN_LEDB, BLUE_CHANNEL);
-    if (!EthPresent) {
-        ledcAttachPin(PIN_LCD_LED, LCD_CHANNEL);
-    }  // When EthPresent, PIN_LCD_LED is used as ETH_CS
-
-    ledcWrite(RED_CHANNEL, 255);
-    ledcWrite(GREEN_CHANNEL, 0);
-    ledcWrite(BLUE_CHANNEL, 255);
+    // RGB LED and LCD channels use LEDC (5kHz, 8-bit).
+    // R/G share LEDC_TIMER_1 (channels 2/3); B/LCD share LEDC_TIMER_2 (channels 4/5).
+    {
+        ledc_timer_config_t tcfg = {};
+        tcfg.speed_mode      = LEDC_LOW_SPEED_MODE;
+        tcfg.duty_resolution = LEDC_TIMER_8_BIT;
+        tcfg.freq_hz         = 5000;
+        tcfg.clk_cfg         = LEDC_AUTO_CLK;
+        tcfg.deconfigure     = false;
+        tcfg.timer_num = LEDC_TIMER_1; ledc_timer_config(&tcfg);
+        tcfg.timer_num = LEDC_TIMER_2; ledc_timer_config(&tcfg);
+    }
+    {
+        ledc_channel_config_t ccfg = {};
+        ccfg.speed_mode          = LEDC_LOW_SPEED_MODE;
+        ccfg.duty                = 0;
+        ccfg.hpoint              = 0;
+        ccfg.flags.output_invert = 0;
+        ccfg.gpio_num = PIN_LEDR;    ccfg.channel = (ledc_channel_t)RED_CHANNEL;   ccfg.timer_sel = LEDC_TIMER_1; ledc_channel_config(&ccfg);
+        ccfg.gpio_num = PIN_LEDG;    ccfg.channel = (ledc_channel_t)GREEN_CHANNEL; ccfg.timer_sel = LEDC_TIMER_1; ledc_channel_config(&ccfg);
+        ccfg.gpio_num = PIN_LEDB;    ccfg.channel = (ledc_channel_t)BLUE_CHANNEL;  ccfg.timer_sel = LEDC_TIMER_2; ledc_channel_config(&ccfg);
+        if (!EthPresent) {
+            ccfg.gpio_num = PIN_LCD_LED; ccfg.channel = (ledc_channel_t)LCD_CHANNEL; ccfg.timer_sel = LEDC_TIMER_2; ledc_channel_config(&ccfg);
+        }  // When EthPresent, PIN_LCD_LED is used as ETH_CS
+    }
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)RED_CHANNEL,   255); ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)RED_CHANNEL);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)GREEN_CHANNEL,   0); ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)GREEN_CHANNEL);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)BLUE_CHANNEL,  255); ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)BLUE_CHANNEL);
     setLCDbacklight(0);
 
     // Setup GPIO interrupt on rising edge of CP output — no longer needed;
