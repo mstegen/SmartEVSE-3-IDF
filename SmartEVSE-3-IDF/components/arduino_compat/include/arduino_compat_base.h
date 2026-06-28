@@ -142,15 +142,6 @@ void attachInterrupt(uint8_t pin, arduino_isr_t isr, int mode);
 #define SERIAL_8O1  0x800005C
 #define SERIAL_8N2  0x800001E
 
-/* ---- GPIO matrix attach/detach shim (legacy Arduino API) ----------------- *
- * v3 source calls `pinMatrixOutAttach/Detach` to temporarily hijack the
- * SPI MOSI pin for use as a button input. The legacy helpers were
- * removed in IDF v6; the shim routes through `rom_gpio_matrix_out()`
- * which is the same underlying primitive.
- */
-void pinMatrixOutAttach(uint8_t pin, uint8_t signal_index, bool out_inv, bool oen_inv);
-void pinMatrixOutDetach(uint8_t pin, bool out_inv, bool oen_inv);
-
 /* ---- LEDC PWM (Arduino style) ------------------------------------------- *
  * The Arduino API exposes ledcSetup(channel, freq, res_bits) and
  * ledcAttachPin(pin, channel) and ledcWrite(channel, duty). The v6

@@ -2,6 +2,7 @@
 /* VSPID_IN_IDX (SPI MOSI signal index) used to live in driver/spi_common.h
  * in earlier IDF versions; in v6 it has moved to soc/gpio_sig_map.h. */
 #include "soc/gpio_sig_map.h"
+#include "esp_rom_gpio.h"
 #if MODEM
 #include <stdint.h>
 #include <stdio.h>
@@ -470,7 +471,7 @@ void getButtonState() {
             // Buttons are read from CH32V003 via SPI register
             ButtonState = etherlcd_read_buttons() & 0x07;
         } else {
-            pinMatrixOutDetach(PIN_LCD_SDO_B3, false, false);       // disconnect MOSI pin
+            esp_rom_gpio_connect_out_signal(PIN_LCD_SDO_B3, SIG_GPIO_OUT_IDX, false, false); // disconnect MOSI pin
             pinMode(PIN_LCD_SDO_B3, INPUT);
             pinMode(PIN_LCD_A0_B2, INPUT);
 
@@ -480,7 +481,7 @@ void getButtonState() {
                           (digitalRead(PIN_IO0_B1)     ? 1 : 0);   // < (left)
 
             pinMode(PIN_LCD_SDO_B3, OUTPUT);
-            pinMatrixOutAttach(PIN_LCD_SDO_B3, VSPID_IN_IDX, false, false); // re-attach MOSI pin
+            esp_rom_gpio_connect_out_signal(PIN_LCD_SDO_B3, VSPID_IN_IDX, false, false); // re-attach MOSI pin
             pinMode(PIN_LCD_A0_B2, OUTPUT);                        // switch pin back to output
         }
     }

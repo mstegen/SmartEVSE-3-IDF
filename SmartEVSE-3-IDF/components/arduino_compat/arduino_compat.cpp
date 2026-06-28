@@ -99,34 +99,6 @@ int analogRead(uint8_t pin) {
     return 0;
 }
 
-/* ---- GPIO matrix shim (pinMatrixOutAttach / pinMatrixOutDetach) ----------- *
- * IDF v6 removed the legacy `pinMatrixOutAttach/Detach` helpers. The v3
- * source uses them to temporarily disconnect the SPI MOSI pin and use
- * it as a GPIO button input, then re-attach it. The replacement is the
- * private `gpio_matrix_output()` API in esp_driver_gpio. We expose thin
- * wrappers that take the same arguments as the legacy helpers.
- */
-#include "esp_private/gpio.h"
-#include "rom/gpio.h"
-
-void pinMatrixOutAttach(uint8_t pin, uint8_t signal_index, bool out_inv, bool oen_inv) {
-    /* The legacy helper routed to esp_rom_gpio_matrix_out(); use the ROM
-     * version directly — it's a no-op for the same signal and works on
-     * all ESP32 targets. */
-    rom_gpio_matrix_out((uint32_t)pin, (uint32_t)signal_index,
-                        (bool)out_inv, (bool)oen_inv);
-}
-
-void pinMatrixOutDetach(uint8_t pin, bool out_inv, bool oen_inv) {
-    /* Detach by routing the pin to a "no-op" signal index. SIG_GPIO_OUT
-     * is 0x100 in IDF; using the matrix with the same signal is the
-     * least surprising way to neutralise the routing. The ESP32 GPIO
-     * matrix always allows overriding back, so simply calling the ROM
-     * helper with the same pin and a benign signal restores input
-     * flexibility. */
-    rom_gpio_matrix_out((uint32_t)pin, 0x100, (bool)out_inv, (bool)oen_inv);
-}
-
 /* ---- GPIO interrupt shim (attachInterrupt) ------------------------------ *
  * The v3 source calls `attachInterrupt(pin, isr, mode)` to install a
  * CP-pulse detector. v6 IDF replaces the legacy `gpio_isr_register`
